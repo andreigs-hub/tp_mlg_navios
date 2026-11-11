@@ -1,0 +1,392 @@
+---
+title: "Análise dos sobreviventes do naufrágio do Titanic"
+subtitle: "Modelos Lineares Generalizados — Regressão binária"
+date: today
+lang: pt
+format:
+  pdf:
+    documentclass: article
+    papersize: a4
+    fontsize: 11pt
+    geometry:
+      - a4paper
+      - margin=2.1cm
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    colorlinks: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Introdução
+
+Este trabalho analisa o arquivo `titanic.csv`, com informações sobre o naufrágio do navio Titanic, ocorrido em 14 de abril de 1912, em sua viagem inaugural. O banco tem `r nrow(readr::read_csv("titanic.csv", show_col_types = FALSE))` passageiros e as seguintes variáveis:
+
+- **vivo**: se a pessoa sobreviveu (`sim`) ou não (`nao`) ao naufrágio. É a variável resposta.
+- **classe**: classe do passageiro no navio (`I`, `II` ou `III`).
+- **idade**: idade do passageiro, em anos.
+- **sexo**: `feminino` ou `masculino`.
+- **sozinho**: se o passageiro viajava sozinho (`sim`) ou acompanhado (`nao`).
+
+Como a variável resposta tem duas categorias, usamos modelos lineares generalizados (MLG) com distribuição binomial. Comparamos três funções de ligação: logit, probit e complemento log-log (cloglog).
+
+```{r}
+#| label: pacotes
+#| message: false
+library(tidyverse)
+library(tidymodels)
+library(pROC)
+tidymodels_prefer()
+theme_set(theme_minimal(base_size = 11))
+```
+
+# Preparação dos dados
+
+```{r}
+#| label: leitura
+titanic <- read_csv("titanic.csv", show_col_types = FALSE)
+
+# A categoria "sim" fica por último, para ser tratada como sucesso (evento).
+dados <- titanic |>
+  mutate(
+    vivo = factor(vivo, levels = c("nao", "sim")),
+    classe = factor(classe, levels = c("I", "II", "III")),
+    sexo = factor(sexo, levels = c("feminino", "masculino")),
+    sozinho = factor(sozinho, levels = c("nao", "sim"))
+  )
+
+glimpse(dados)
+```
+
+```{r}
+#| label: qualidade
+# Valores faltantes e linhas repetidas
+sum(is.na(dados))
+sum(duplicated(dados))
+```
+
+# Análise exploratória
+
+```{r}
+#| label: freq-vivo
+dados |>
+  count(vivo) |>
+  mutate(proporcao = n / sum(n))
+```
+
+```{r}
+#| label: resumo-categorias
+resumo_cat <- dados |>
+  pivot_longer(
+    c(classe, sexo, sozinho),
+    names_to = "variavel",
+    values_to = "categoria"
+  ) |>
+  group_by(variavel, categoria) |>
+  summarise(
+    n = n(),
+    prop_sobreviveu = mean(vivo == "sim"),
+    .groups = "drop"
+  )
+
+resumo_cat
+```
+
+```{r}
+#| label: fig-categorias
+#| fig-cap: "Proporção de sobreviventes em cada categoria."
+resumo_cat |>
+  ggplot(aes(x = categoria, y = prop_sobreviveu)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = scales::percent(prop_sobreviveu, accuracy = 1)),
+            vjust = -0.4, size = 3) +
+  facet_wrap(~variavel, scales = "free_x") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Proporção de sobreviventes")
+```
+
+```{r}
+#| label: fig-idade
+#| fig-cap: "Distribuição da idade segundo a sobrevivência."
+ggplot(dados, aes(x = vivo, y = idade, fill = vivo)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(x = "Sobreviveu", y = "Idade (anos)")
+```
+
+```{r}
+#| label: resumo-idade
+dados |>
+  group_by(vivo) |>
+  summarise(
+    media = mean(idade),
+    mediana = median(idade),
+    .groups = "drop"
+  )
+```
+
+# Modelos GLM no banco completo
+
+Primeiro ajustamos os três modelos com todas as variáveis explicativas. Esta etapa serve para interpretar os coeficientes.
+
+```{r}
+#| label: ajuste-glm
+formula_completa <- vivo ~ classe + idade + sexo + sozinho
+
+fit_logit <- glm(
+  formula_completa, data = dados,
+  family = binomial(link = "logit")
+)
+fit_probit <- glm(
+  formula_completa, data = dados,
+  family = binomial(link = "probit")
+)
+fit_cloglog <- glm(
+  formula_completa, data = dados,
+  family = binomial(link = "cloglog")
+)
+```
+
+Coeficientes do modelo logit. A coluna `estimate` está exponenciada, então é a razão de chances (odds ratio).
+
+```{r}
+#| label: tidy-logit
+tidy(fit_logit, conf.int = TRUE, exponentiate = TRUE)
+```
+
+Comparação das três ligações. Quanto menor o AIC, melhor o ajuste, considerando o número de parâmetros.
+
+```{r}
+#| label: comparacao-ligacoes
+tibble(
+  modelo = c("logit", "probit", "cloglog"),
+  AIC = c(AIC(fit_logit), AIC(fit_probit), AIC(fit_cloglog)),
+  deviance_residual = c(
+    deviance(fit_logit), deviance(fit_probit), deviance(fit_cloglog)
+  )
+)
+```
+
+Teste de razão de verossimilhanças para cada termo do modelo logit.
+
+```{r}
+#| label: drop1
+drop1(fit_logit, test = "Chisq")
+```
+
+# Divisão em treino e teste
+
+```{r}
+#| label: split
+set.seed(123)
+split <- initial_split(dados, prop = 0.75, strata = vivo)
+treino <- training(split)
+teste <- testing(split)
+
+count(treino, vivo)
+count(teste, vivo)
+```
+
+# Validação cruzada repetida
+
+```{r}
+#| label: vfolds
+set.seed(123)
+vfolds <- vfold_cv(treino, v = 10, repeats = 5, strata = vivo)
+```
+
+# Receita de pré-processamento
+
+```{r}
+#| label: receita
+receita <- recipe(
+  vivo ~ classe + idade + sexo + sozinho,
+  data = treino
+) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(all_nominal_predictors())
+
+# Fórmula gerada pela receita, com as variáveis dummy
+receita |>
+  prep() |>
+  formula()
+```
+
+# Comparação dos modelos por validação cruzada
+
+```{r}
+#| label: especificacao-modelos
+logit <- logistic_reg() |>
+  set_engine("glm")
+
+probit <- logistic_reg() |>
+  set_engine("glm", family = stats::binomial(link = "probit"))
+
+cloglog <- logistic_reg() |>
+  set_engine("glm", family = stats::binomial(link = "cloglog"))
+
+modelos <- workflow_set(
+  preproc = list(receita = receita),
+  models = list(logit = logit, probit = probit, cloglog = cloglog)
+)
+
+modelos
+```
+
+```{r}
+#| label: ajuste-cv
+# Métricas probabilísticas
+metricas_prob <- metric_set(roc_auc, brier_class, accuracy)
+
+# Guarda as predições de cada dobra
+ctrl <- control_resamples(save_pred = TRUE)
+
+set.seed(123)
+resultados <- workflow_map(
+  modelos,
+  fn = "fit_resamples",
+  resamples = vfolds,
+  metrics = metricas_prob,
+  control = ctrl,
+  verbose = FALSE
+)
+```
+
+```{r}
+#| label: metricas-cv
+metricas_cv <- collect_metrics(resultados)
+
+metricas_cv |>
+  select(wflow_id, .metric, mean, std_err) |>
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err)) |>
+  arrange(desc(mean_roc_auc))
+```
+
+# Escolha e ajuste do modelo final
+
+O melhor modelo é o que tem maior AUC (área sob a curva ROC) média na validação cruzada.
+
+```{r}
+#| label: melhor-modelo
+best_model <- metricas_cv |>
+  filter(.metric == "roc_auc") |>
+  slice_max(order_by = mean, n = 1, with_ties = FALSE)
+
+best_model
+
+best_id <- best_model |>
+  pull(wflow_id)
+
+best <- extract_workflow(resultados, id = best_id)
+
+final <- best |>
+  fit(data = treino)
+
+tidy(final)
+```
+
+```{r}
+#| label: glm-final
+final_glm <- extract_fit_engine(final)
+class(final_glm)
+```
+
+# Análise de resíduos do modelo final
+
+Usamos os resíduos deviance do modelo final, ajustado no conjunto de treino.
+
+```{r}
+#| label: fig-residuos
+#| fig-cap: "Resíduos deviance contra probabilidades ajustadas."
+#| fig-width: 5.5
+#| fig-height: 4
+dados_res <- tibble(
+  ajustado = fitted(final_glm),
+  residuo = residuals(final_glm, type = "deviance")
+)
+
+ggplot(dados_res, aes(ajustado, residuo)) +
+  geom_point(alpha = 0.4) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Probabilidade ajustada", y = "Resíduo deviance")
+```
+
+Como a resposta é binária (sobreviveu ou não), os resíduos formam duas faixas, uma para cada resultado. Essa forma é esperada para este tipo de modelo, por isso o gráfico ajuda pouco a detectar problemas.
+
+# Avaliação no conjunto de teste
+
+Predições do modelo final nas observações que não foram usadas no ajuste.
+
+```{r}
+#| label: predicoes-teste
+preds_teste <- predict(final, new_data = teste, type = "prob") |>
+  bind_cols(predict(final, new_data = teste, type = "class")) |>
+  bind_cols(teste |> select(vivo))
+
+head(preds_teste)
+```
+
+```{r}
+#| label: metricas-teste
+# "sim" é o evento de interesse, por isso event_level = "second"
+roc_auc(preds_teste, truth = vivo, .pred_sim, event_level = "second")
+# Escore de Brier calculado diretamente:
+# média de (probabilidade prevista de "sim" - resultado observado)^2
+mean((preds_teste$.pred_sim - as.numeric(preds_teste$vivo == "sim"))^2)
+accuracy(preds_teste, truth = vivo, estimate = .pred_class)
+```
+
+Matriz de confusão, usando o ponto de corte padrão de 0,5.
+
+```{r}
+#| label: matriz-confusao
+conf_mat(preds_teste, truth = vivo, estimate = .pred_class)
+```
+
+```{r}
+#| label: fig-roc
+#| fig-cap: "Curva ROC no conjunto de teste (pacote yardstick)."
+#| fig-width: 5
+#| fig-height: 4.5
+preds_teste |>
+  roc_curve(truth = vivo, .pred_sim, event_level = "second") |>
+  autoplot()
+```
+
+Conferência da AUC com o pacote pROC.
+
+```{r}
+#| label: roc-proc
+roc_obj <- roc(
+  response = teste$vivo,
+  predictor = preds_teste$.pred_sim,
+  levels = c("nao", "sim")
+)
+
+auc(roc_obj)
+```
+
+# Conclusões
+
+**Principais fatores.** Sexo, classe e idade estão associados à sobrevivência, mesmo quando as outras variáveis são mantidas fixas.
+
+- **Sexo:** a chance de sobreviver de um homem foi cerca de 0,08 vez a de uma mulher (razão de chances; intervalo de 95%: 0,05 a 0,12).
+- **Classe:** em relação à classe I, a razão de chances foi 0,26 na classe II e 0,07 na classe III.
+- **Idade:** cada ano a mais reduz a chance de sobreviver em cerca de 4% (razão de chances de 0,96 por ano; intervalo de 95%: 0,95 a 0,98).
+- **Viajar sozinho:** não há evidência de efeito (p = 0,51 no teste da razão de verossimilhanças; razão de chances de 1,15, com intervalo de 0,76 a 1,73). Na tabela descritiva, quem viajava sozinho sobreviveu menos, mas esse efeito some quando se considera sexo, idade e classe.
+
+**Escolha da ligação.** Os três modelos têm desempenho praticamente igual. Na validação cruzada, a AUC foi 0,843 (logit), 0,842 (probit) e 0,842 (cloglog). No ajuste com todos os dados, o cloglog teve o menor AIC (653 contra 659 do logit). Mantivemos o logit porque ele teve a maior AUC média, como no roteiro da disciplina. A diferença entre eles é muito pequena.
+
+**Desempenho no conjunto de teste.** Com 179 passageiros que não entraram no ajuste:
+
+- AUC de 0,866.
+- Acurácia de 0,804, ou seja, 35 erros em 179 casos.
+- Escore de Brier de 0,140, quanto menor, melhor.
+
+**Limitações.**
+
+- O banco tem 281 linhas repetidas. Não há identificador de passageiro, então não sabemos se são pessoas diferentes com as mesmas características. Mantivemos essas linhas, mas repetições podem tornar as métricas da validação cruzada um pouco otimistas.
+- Os resultados mostram associação, não causa.
+- Os dados se referem a um único naufrágio, em 1912.
