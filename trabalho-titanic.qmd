@@ -1,34 +1,102 @@
----
+----
 title: "Quem sobreviveu ao Titanic? Uma análise com modelos lineares generalizados"
 subtitle: "Trabalho da disciplina de Modelos Lineares Generalizados (EST079)"
+
 author:
   - Andrei Gustavo Sartao
   - Lucas Teodoro de Paula Silva
   - Ewerton Albuquerque do Nascimento
   - Cassio Alexandre dos Santos
   - Gabriel Vilela Lin
+
 date: today
-lang: pt
-abstract: |
-  Este trabalho analisa os fatores associados à sobrevivência de passageiros do naufrágio do Titanic, em 1912. A variável resposta indica se a pessoa sobreviveu. As explicativas são classe, idade, sexo e se o passageiro viajava sozinho. Comparamos três funções de ligação para o modelo binomial (logit, probit e complemento log-log), escolhemos um modelo por validação cruzada repetida e avaliamos seu desempenho em um conjunto de teste separado. Os resultados indicam que sexo, classe e idade estão associados à sobrevivência.
-keywords: [regressão binária, ligação logit, ligação probit, ligação cloglog, validação cruzada, Titanic]
+lang: pt-BR
+
 format:
   pdf:
+    pdf-engine: lualatex
     documentclass: article
     papersize: a4
-    fontsize: 11pt
+    fontsize: 12pt
+
     geometry:
-      - a4paper
-      - margin=2.3cm
-    toc: true
-    toc-depth: 2
+      - top=3cm
+      - left=3cm
+      - bottom=2cm
+      - right=2cm
+
+    toc: false
     number-sections: true
-    colorlinks: true
+    number-depth: 2
+    colorlinks: false
+
+    fig-pos: H
+    fig-cap-location: bottom
+    tbl-cap-location: top
+
     include-in-header:
       text: |
+        \usepackage{setspace}
+        \usepackage{indentfirst}
+        \usepackage{ragged2e}
+        \usepackage{fancyhdr}
+        \usepackage{titlesec}
+
+        % Impede a duplicacao do titulo automatico
+        \AtBeginDocument{\renewcommand{\maketitle}{}}
+
+        % Texto justificado
+        \AtBeginDocument{\justifying}
+
+        % Espacamento de 1,5
+        \AtBeginDocument{\onehalfspacing}
+
+        % Recuo dos paragrafos
+        \setlength{\parindent}{1.25cm}
+        \setlength{\parskip}{0pt}
+
+        % Numeracao de paginas
+        \pagestyle{fancy}
+        \fancyhf{}
+        \fancyhead[R]{\thepage}
+        \renewcommand{\headrulewidth}{0pt}
+        \setlength{\headheight}{15pt}
+
+        % Estilo de paginas especiais
+        \fancypagestyle{plain}{
+          \fancyhf{}
+          \fancyhead[R]{\thepage}
+          \renewcommand{\headrulewidth}{0pt}
+        }
+
+        % Secoes
+        \titleformat{\section}
+          {\normalfont\bfseries\fontsize{12}{14}\selectfont}
+          {\thesection}{1em}{}
+
+        \titleformat{\subsection}
+          {\normalfont\bfseries\fontsize{12}{14}\selectfont}
+          {\thesubsection}{1em}{}
+
+        % Espacamento dos titulos
+        \titlespacing*{\section}
+          {0pt}{18pt}{12pt}
+
+        \titlespacing*{\subsection}
+          {0pt}{12pt}{8pt}
+
+        % Sumario em portugues
+        \renewcommand{\contentsname}{SUMÁRIO}
+
+        % Compatibilidade com Pandoc
         \makeatletter
-        \AtBeginDocument{\@ifundefined{pandocbounded}{}{\renewcommand{\pandocbounded}[1]{#1}}}
+        \AtBeginDocument{
+          \@ifundefined{pandocbounded}{}{
+            \renewcommand{\pandocbounded}[1]{#1}
+          }
+        }
         \makeatother
+
 execute:
   echo: false
   warning: false
@@ -39,15 +107,89 @@ execute:
   fig-format: pdf
 ---
 
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\begin{center}
+
+{\large\bfseries
+UNIVERSIDADE FEDERAL DE MINAS GERAIS}
+
+\vspace{0.3cm}
+
+{\normalsize
+INSTITUTO DE CIÊNCIAS EXATAS}
+
+\vspace{3cm}
+
+Andrei Gustavo Sartao
+
+Lucas Teodoro de Paula Silva
+
+Ewerton Albuquerque do Nascimento
+
+Cassio Alexandre dos Santos
+
+Gabriel Vilela Lin
+
+\vfill
+
+{\large\bfseries
+QUEM SOBREVIVEU AO TITANIC?}
+
+\vspace{0.4cm}
+
+{\large\bfseries
+UMA ANÁLISE COM MODELOS LINEARES GENERALIZADOS}
+
+\vspace{2cm}
+
+\end{center}
+
+\begin{flushright}
+\begin{minipage}{8cm}
+\end{minipage}
+\end{flushright}
+
+\vfill
+
+\begin{center}
+Belo Horizonte
+
+2026
+\end{center}
+
+\end{titlepage}
+
+\clearpage
+\pagenumbering{roman}
+\setcounter{page}{1}
+
+\tableofcontents
+
+\clearpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\section*{Resumo}
+\addcontentsline{toc}{section}{Resumo}
+```
+Este trabalho analisa os fatores associados à sobrevivência de passageiros do naufrágio do Titanic, em 1912. A variável resposta indica se a pessoa sobreviveu. As variáveis explicativas são classe, idade, sexo e se o passageiro viajava sozinho. Comparamos três funções de ligação para o modelo binomial (logit, probit e complemento log-log), escolhemos um modelo por validação cruzada repetida e avaliamos seu desempenho em um conjunto de teste separado. Os resultados indicam que sexo, classe e idade estão associados à sobrevivência.
+
+**Palavras-chave:** regressão binária; ligação logit; ligação probit; ligação cloglog; validação cruzada; Titanic.
+
+```{=latex}
+\clearpage
+```
 # Introdução
 
 O navio Titanic naufragou em 14 de abril de 1912, na sua viagem inaugural. Este trabalho usa o banco `titanic.csv`, com informações de passageiros do navio. Nosso objetivo é entender quais características estão associadas à sobrevivência.
 
 Temos três objetivos:
 
-1. Descrever o perfil dos passageiros e a sobrevivência em cada grupo.
-2. Ajustar modelos binomiais com três funções de ligação e comparar seu ajuste.
-3. Escolher um modelo por validação cruzada e avaliar seu desempenho em dados novos.
+1.  Descrever o perfil dos passageiros e a sobrevivência em cada grupo.
+2.  Ajustar modelos binomiais com três funções de ligação e comparar seu ajuste.
+3.  Escolher um modelo por validação cruzada e avaliar seu desempenho em dados novos.
 
 > **Nota: Por que um modelo linear generalizado?**
 >
@@ -108,7 +250,7 @@ tibble(
 
 # Análise exploratória
 
-A @tbl-freq mostra a proporção geral de sobreviventes.
+A partir dos dados observados, a @tbl-freq mostra a proporção geral de sobreviventes.
 
 ```{r}
 #| label: tbl-freq
@@ -203,6 +345,31 @@ ggplot(dados, aes(x = idade, fill = vivo)) +
 
 Sexo e classe aparecem como os primeiros sinais de diferença. Essa leitura é só descritiva. Para saber se a diferença se mantém quando as outras variáveis entram na conta, precisamos do modelo.
 
+# Divisão em treino e teste
+
+Separamos 75% dos passageiros para ajustar e escolher o modelo (treino) e 25% para avaliar o modelo final (teste). A divisão manteve a proporção de sobreviventes nos dois conjuntos.
+
+```{r}
+#| label: split
+set.seed(123)
+split <- initial_split(dados, prop = 0.75, strata = vivo)
+treino <- training(split)
+teste <- testing(split)
+```
+
+```{r}
+#| label: tbl-split
+#| tbl-cap: "Número de passageiros em cada conjunto."
+bind_rows(
+  count(treino, vivo) |> mutate(Conjunto = "Treino"),
+  count(teste, vivo) |> mutate(Conjunto = "Teste")
+) |>
+  pivot_wider(names_from = vivo, values_from = n) |>
+  rename(`Não sobreviveu` = nao, Sobreviveu = sim) |>
+  select(Conjunto, `Não sobreviveu`, Sobreviveu) |>
+  kable(booktabs = TRUE, align = "lrr")
+```
+
 # Modelos no banco completo
 
 Para cada passageiro $i$, seja $\pi_i$ a probabilidade de sobreviver. O modelo liga $\pi_i$ ao preditor linear $\eta_i$, com as variáveis explicativas:
@@ -213,9 +380,9 @@ $$
 
 As três funções de ligação são:
 
-- **Logit:** $g(\pi) = \log\{\pi/(1-\pi)\}$.
-- **Probit:** $g(\pi) = \Phi^{-1}(\pi)$, em que $\Phi$ é a função de distribuição normal padrão.
-- **Complemento log-log (cloglog):** $g(\pi) = \log\{-\log(1-\pi)\}$.
+-   **Logit:** $g(\pi) = \log\{\pi/(1-\pi)\}$.
+-   **Probit:** $g(\pi) = \Phi^{-1}(\pi)$, em que $\Phi$ é a função de distribuição normal padrão.
+-   **Complemento log-log (cloglog):** $g(\pi) = \log\{-\log(1-\pi)\}$.
 
 Na análise completa, ajustamos os três modelos com todas as variáveis.
 
@@ -357,30 +524,100 @@ anova(fit_reduz, fit_logit, test = "Chisq") |>
 >
 > O termo `sozinho` não tem efeito detectável quando sexo, idade e classe estão no modelo. Isso não significa que viajar sozinho não tenha relação nenhuma com a sobrevivência. Na tabela descritiva, quem viajava sozinho sobreviveu menos. Esse efeito bruto pode vir, em parte, da composição dos grupos por sexo, idade e classe.
 
-# Divisão em treino e teste
+## Análise de significância das interações
 
-Separamos 75% dos passageiros para ajustar e escolher o modelo (treino) e 25% para avaliar o modelo final (teste). A divisão manteve a proporção de sobreviventes nos dois conjuntos.
-
-```{r}
-#| label: split
-set.seed(123)
-split <- initial_split(dados, prop = 0.75, strata = vivo)
-treino <- training(split)
-teste <- testing(split)
-```
+Além dos efeitos individuais das variáveis explicativas, investigou-se a existência de interações entre sexo e classe, sexo e idade, e classe e idade. O objetivo foi avaliar se a associação entre uma característica do passageiro e sua probabilidade de sobrevivência varia em função de outra característica. Para isso, foram ajustados modelos de regressão logística com e sem os respectivos termos de interação, utilizando os dados de treinamento. Essa comparação foi realizada pelo teste da razão de verossimilhanças, considerando um nível de significância de 5%. Ainda assim, a hipótese nula estabelece que os coeficientes associados aos termos de interação são conjuntamente iguais a zero, enquanto a hipótese alternativa considera que pelo menos um desses coeficientes é diferente de zero.
 
 ```{r}
-#| label: tbl-split
-#| tbl-cap: "Número de passageiros em cada conjunto."
-bind_rows(
-  count(treino, vivo) |> mutate(Conjunto = "Treino"),
-  count(teste, vivo) |> mutate(Conjunto = "Teste")
-) |>
-  pivot_wider(names_from = vivo, values_from = n) |>
-  rename(`Não sobreviveu` = nao, Sobreviveu = sim) |>
-  select(Conjunto, `Não sobreviveu`, Sobreviveu) |>
-  kable(booktabs = TRUE, align = "lrr")
+#| label: tbl-interacoes
+#| tbl-cap: "Testes de significância das interações pelo teste da razão de verossimilhanças."
+
+# Modelo logístico sem interações
+modelo_sem_interacao <- glm(
+  vivo ~ classe + idade + sexo + sozinho,
+  data = treino,
+  family = binomial(link = "logit")
+)
+
+# Modelos com cada interação
+modelo_sexo_classe <- update(
+  modelo_sem_interacao,
+  . ~ . + sexo:classe
+)
+
+modelo_sexo_idade <- update(
+  modelo_sem_interacao,
+  . ~ . + sexo:idade
+)
+
+modelo_classe_idade <- update(
+  modelo_sem_interacao,
+  . ~ . + classe:idade
+)
+
+# Função para realizar o teste de razão de verossimilhanças
+teste_interacao <- function(modelo, nome) {
+
+  resultado <- anova(
+    modelo_sem_interacao,
+    modelo,
+    test = "Chisq"
+  )
+
+  tibble(
+    Interacao = nome,
+    Qui_quadrado = resultado$Deviance[2],
+    GL = resultado$Df[2],
+    Valor_p = resultado[["Pr(>Chi)"]][2]
+  )
+}
+
+# Resultados
+resultados_interacoes <- bind_rows(
+  teste_interacao(
+    modelo_sexo_classe,
+    "Sexo × classe"
+  ),
+  teste_interacao(
+    modelo_sexo_idade,
+    "Sexo × idade"
+  ),
+  teste_interacao(
+    modelo_classe_idade,
+    "Classe × idade"
+  )
+)
+
+# Tabela das interações
+resultados_interacoes |>
+  mutate(
+    Estatistica = fmt(Qui_quadrado, 3),
+    `Valor-p` = ifelse(
+      Valor_p < 0.001,
+      "< 0,001",
+      fmt(Valor_p, 3)
+    ),
+    Resultado = ifelse(
+      Valor_p < 0.05,
+      "Significativa",
+      "Não significativa"
+    )
+  ) |>
+  select(
+    Interacao,
+    Estatistica,
+    GL,
+    `Valor-p`,
+    Resultado
+  ) |>
+  knitr::kable(
+    booktabs = TRUE,
+    align = "lrrrl"
+  )
 ```
+
+Os resultados apresentados na @tbl-interacoes indicam que as interações entre sexo e classe (p < 0,001) e entre sexo e idade (p < 0,001) apresentaram significância estatística ao nível de 5%. Tais resultados sugerem que a associação entre sexo e sobrevivência varia conforme a classe e a idade dos passageiros, respectivamente. Por outro lado, a interação entre classe e idade não apresentou significância estatística (p = 0,190). Desse modo, não foram encontradas evidências suficientes de que a inclusão desse termo melhore significativamente o ajuste do modelo. Então, Mesmo que as interações entre sexo e classe e entre sexo e idade tenham apresentado significância estatística quando avaliadas separadamente, sua inclusão no modelo final deve considerar também os resultados da validação cruzada.
+
 
 # Validação cruzada repetida
 
@@ -391,6 +628,8 @@ No conjunto de treino, repetimos a validação cruzada em 10 partes (*folds*), 5
 set.seed(123)
 vfolds <- vfold_cv(treino, v = 10, repeats = 5, strata = vivo)
 ```
+
+
 
 ```{r}
 #| label: receita
@@ -494,6 +733,95 @@ tidy(final) |>
   ) |>
   kable(booktabs = TRUE, align = "lrrr")
 ```
+
+## Interpretação das razões de chances (RC)
+
+Para avaliar a associação entre as características dos passageiros e a sobrevivência, foram calculadas as razões de chances (*Odds Ratios*) a partir dos coeficientes estimados pelo modelo de regressão logística. Nesse sentido, a razão de chances associada a uma variação unitária de uma variável explicativa é obtida pela exponenciação de seu coeficiente estimado:
+
+$$
+RC_j = \exp(\beta_j)
+$$
+
+A interpretação percentual dessa medida é dada por:
+
+$$
+100 \times [\exp(\beta_j)-1]\%
+$$
+
+Deve-se ressaltar que valores de RC superiores a 1 indicam maiores chances de sobrevivência, enquanto valores inferiores a 1 indicam chances menores, em relação à categoria de referência e mantendo constantes as demais variáveis explicativas. Para facilitar a interpretação, os coeficientes foram apresentados na escala original das variáveis, considerando a idade em anos e as categorias de referência definidas anteriormente. A @tbl-rc-final apresenta as estimativas das razões de chances, seus intervalos de confiança de 95% e os respectivos valores-p.
+
+```{r}
+#| label: tbl-rc-final
+#| tbl-cap: "Razões de chances (RC), intervalos de confiança de 95% e significância estatística."
+#| echo: false
+
+# Verificar se o modelo selecionado utiliza a ligação logit
+if (final_glm$family$link != "logit") {
+  stop(
+    "O modelo selecionado não é logit. ",
+    "A interpretação por exp(beta) precisa ser adaptada."
+  )
+}
+
+# Ajustar a especificação selecionada na escala original
+modelo_rc <- glm(
+  vivo ~ classe + idade + sexo + sozinho,
+  data = treino,
+  family = binomial(link = "logit")
+)
+
+# Estimar as razões de chances e seus intervalos
+tabela_rc <- broom::tidy(
+  modelo_rc,
+  conf.int = TRUE,
+  exponentiate = TRUE
+) |>
+  filter(term != "(Intercept)") |>
+  mutate(
+    Variavel = case_when(
+      term == "classeII" ~ "Classe II (ref.: I)",
+      term == "classeIII" ~ "Classe III (ref.: I)",
+      term == "idade" ~ "Idade (por ano)",
+      term == "sexomasculino" ~ "Masculino (ref.: feminino)",
+      term == "sozinhosim" ~ "Sozinho (ref.: acompanhado)",
+      TRUE ~ term
+    ),
+    Variacao = 100 * (estimate - 1)
+  )
+
+# Apresentação da tabela
+tabela_rc |>
+  transmute(
+    Variavel,
+    RC = fmt(estimate, 3),
+    `IC 95%` = paste0(
+      "[", fmt(conf.low, 3),
+      "; ", fmt(conf.high, 3), "]"
+    ),
+    `Variação (%)` = fmt(Variacao, 2),
+    `Valor-p` = ifelse(
+      p.value < 0.001,
+      "< 0,001",
+      fmt(p.value, 3)
+    )
+  ) |>
+  knitr::kable(
+    booktabs = TRUE,
+    align = "lrrrr"
+  )
+```
+
+### Interpretação dos resultados
+
+As estimativas apresentadas na @tbl-rc-final evidenciam diferenças nas chances de sobrevivência dos passageiros do Titanic em função de suas características individuais. As razões de chances (RC) permitem quantificar a magnitude e a direção dessas associações, considerando constantes as demais variáveis explicativas incluídas no modelo.
+
+Em relação à classe, os passageiros da segunda e da terceira classes apresentaram, respectivamente, chances de sobrevivência 78,07% e 92,92% menores em comparação aos passageiros da primeira classe. Esses resultados evidenciam uma associação negativa entre pertencer às classes inferiores e as chances de sobrevivência, sendo essa diferença particularmente acentuada entre os passageiros da terceira classe.
+
+Quanto ao sexo, os passageiros do sexo masculino apresentaram chances de sobrevivência 90,95% menores em relação às mulheres, após o ajuste pelas demais variáveis. Essa diferença indica uma forte associação entre o sexo do passageiro e a sobrevivência, mesmo quando consideradas simultaneamente a classe, a idade e a condição de viajar sozinho.
+
+A idade também apresentou associação negativa com a sobrevivência. Estimou-se que cada ano adicional de idade estivesse associado a uma redução de 2,97% nas chances de sobrevivência, mantidas constantes as demais características. Essa variação percentual é relativamente pequena para um único ano, pois seu efeito se acumula ao considerar diferenças maiores de idade, conforme a especificação logit adotada.
+
+Por outro lado, os passageiros que viajavam sozinhos apresentaram chances de sobrevivência estimadas 1,46% maiores em relação àqueles que viajavam acompanhados. Entretanto, essa associação não foi estatisticamente significativa ao nível de 5% (p = 0,952). Portanto, não foram encontradas evidências suficientes de uma associação entre viajar sozinho e as chances de sobrevivência após o controle pelas demais variáveis do modelo.
 
 ## Resíduos
 
@@ -665,13 +993,13 @@ A classe também tem efeito claro. Passageiros da classe III tiveram chance bem 
 
 # Conclusões
 
-- O sexo, a classe e a idade estão associados à sobrevivência, mesmo com as outras variáveis fixas.
-- O efeito de viajar sozinho não é detectável no modelo completo.
-- As três funções de ligação têm desempenho muito parecido. O logit foi escolhido pelo critério de maior AUC na validação cruzada.
-- No conjunto de teste, o modelo final tem AUC de `r fmt(auc_proc)` e acurácia de `r fmt(accuracy(preds_teste, truth = vivo, estimate = .pred_class)$.estimate)`.
+-   O sexo, a classe e a idade estão associados à sobrevivência, mesmo com as outras variáveis fixas.
+-   O efeito de viajar sozinho não é detectável no modelo completo.
+-   As três funções de ligação têm desempenho muito parecido. O logit foi escolhido pelo critério de maior AUC na validação cruzada.
+-   No conjunto de teste, o modelo final tem AUC de `r fmt(auc_proc)` e acurácia de `r fmt(accuracy(preds_teste, truth = vivo, estimate = .pred_class)$.estimate)`.
 
 # Limitações
 
-- O banco tem `r n_repetidas` linhas repetidas. Como não há identificador de passageiro, não sabemos se são pessoas diferentes com as mesmas características. Mantivemos as linhas, mas repetições podem tornar as métricas da validação cruzada um pouco otimistas.
-- Os resultados mostram associação, não causa.
-- Os dados se referem a um único naufrágio, de 1912, e não a outros cenários.
+-   O banco tem `r n_repetidas` linhas repetidas. Como não há identificador de passageiro, não sabemos se são pessoas diferentes com as mesmas características. Mantivemos as linhas, mas repetições podem tornar as métricas da validação cruzada um pouco otimistas.
+-   Os resultados mostram associação, não causa.
+-   Os dados se referem a um único naufrágio, de 1912, e não a outros cenários.
