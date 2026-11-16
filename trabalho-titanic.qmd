@@ -616,7 +616,7 @@ resultados_interacoes |>
   )
 ```
 
-Os resultados apresentados na @tbl-interacoes indicam que as interações entre sexo e classe (p < 0,001) e entre sexo e idade (p < 0,001) apresentaram significância estatística ao nível de 5%. Tais resultados sugerem que a associação entre sexo e sobrevivência varia conforme a classe e a idade dos passageiros, respectivamente. Por outro lado, a interação entre classe e idade não apresentou significância estatística (p = 0,190). Desse modo, não foram encontradas evidências suficientes de que a inclusão desse termo melhore significativamente o ajuste do modelo. Então, Mesmo que as interações entre sexo e classe e entre sexo e idade tenham apresentado significância estatística quando avaliadas separadamente, sua inclusão no modelo final deve considerar também os resultados da validação cruzada.
+Os resultados apresentados na @tbl-interacoes indicam que as interações entre sexo e classe (p < 0,001) e entre sexo e idade (p < 0,001) apresentaram significância estatística ao nível de 5%. Tais resultados sugerem que a associação entre sexo e sobrevivência varia conforme a classe e a idade dos passageiros, respectivamente. Por outro lado, a interação entre classe e idade não apresentou significância estatística (p = 0,190). Desse modo, não foram encontradas evidências suficientes de que a inclusão desse termo melhore significativamente o ajuste do modelo. Então, mesmo que as interações entre sexo e classe e entre sexo e idade tenham apresentado significância estatística quando avaliadas separadamente, sua inclusão no modelo final deve considerar também os resultados da validação cruzada.
 
 
 # Validação cruzada repetida
