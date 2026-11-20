@@ -420,7 +420,7 @@ Fizemos a divisão neste ponto, antes da modelagem, porque todas as escolhas (li
 ```{r}
 #| label: split
 set.seed(123)
-split <- initial_split(dados, prop = 0.75, strata = vivo)
+split <- initial_split(dados, prop = 0.8, strata = vivo)
 treino <- training(split)
 teste <- testing(split)
 ```
