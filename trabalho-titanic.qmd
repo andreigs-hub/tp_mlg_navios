@@ -533,32 +533,65 @@ A condição de viajar sozinho também apresentou associação descritiva com o 
 
 ```{r}
 #| label: fig-sexo-classe
-#| fig-cap: "Proporção de sobreviventes por sexo e classe."
-#| fig-height: 3.5
-treino |>
-  group_by(sexo, classe) |>
+#| fig-cap: "Proporção de sobreviventes por sexo e classe no conjunto de treinamento."
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+# Cada barra representa a taxa de sobrevivência do grupo.
+# O n informa o número TOTAL de passageiros naquele grupo.
+dados_grafico <- treino |>
+  group_by(classe, sexo) |>
   summarise(
-    prop = mean(vivo == "sim"),
+    sobreviventes = sum(vivo == "sim"),
     n = n(),
+    prop = sobreviventes / n,
     .groups = "drop"
   ) |>
-  ggplot(aes(x = classe, y = prop, fill = sexo)) +
-  geom_col(position = "dodge") +
+  mutate(
+    rotulo = paste0(
+      scales::percent(prop, accuracy = 0.1, decimal.mark = ","),
+      "\n(n = ", n, ")"
+    )
+  )
+
+ggplot(
+  dados_grafico,
+  aes(x = classe, y = prop, fill = sexo)
+) +
+  geom_col(
+    position = position_dodge(width = 0.8),
+    width = 0.72
+  ) +
   geom_text(
-    aes(label = n),
-    position = position_dodge(width = 0.9),
-    vjust = -0.4,
-    size = 3
+    aes(label = rotulo),
+    position = position_dodge(width = 0.8),
+    vjust = -0.18,
+    lineheight = 0.95,
+    size = 3.2
   ) +
   scale_y_continuous(
-    labels = scales::percent,
-    limits = c(0, 1.05)
+    breaks = seq(0, 1, by = 0.25),
+    labels = scales::label_percent(accuracy = 1),
+    limits = c(0, 1.17),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_x_discrete(
+    labels = c(I = "1ª classe", II = "2ª classe", III = "3ª classe")
   ) +
   labs(
-    x = "Classe",
+    x = "Classe da passagem",
     y = "Proporção de sobreviventes",
     fill = "Sexo",
-    caption = "Números acima das barras representam passageiros"
+    caption = "n representa o total de passageiros em cada combinação de sexo e classe."
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.caption = element_text(hjust = 0, size = 9),
+    plot.margin = margin(8, 12, 8, 8)
   )
 ```
 
