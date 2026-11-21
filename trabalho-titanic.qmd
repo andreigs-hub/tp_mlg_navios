@@ -150,7 +150,7 @@ Belo Horizonte
 {\bfseries RESUMO}
 \end{center}
 
-Este trabalho investiga a relação entre características dos passageiros do Titanic e a probabilidade de sobrevivência ao naufrágio. Foram considerados sexo, idade, classe da passagem e condição de viajar sozinho. A análise combina descrição dos dados, modelos lineares generalizados para resposta binária e avaliação preditiva em uma amostra de teste separada do treinamento. Foram comparadas as ligações logito, probito e complemento log-log, além de cinco especificações com diferentes estruturas de interações. A contribuição das variáveis foi examinada por testes de razão de verossimilhanças, com atenção particular à ANOVA tipo III. O desempenho fora da amostra de ajuste foi avaliado por validação cruzada e pelas medidas de discriminação e erro preditivo. Os resultados são interpretados como associações observadas na amostra, sem atribuição de causalidade. O estudo também examina limitações relacionadas à composição dos grupos, à complexidade dos modelos e à dificuldade de representar a sobrevivência infantil.
+Este trabalho investiga a relação entre características dos passageiros do Titanic e a probabilidade de sobrevivência ao naufrágio. Foram considerados sexo, idade, classe da passagem e condição de viajar sozinho, em 714 passageiros divididos em treinamento (80%) e teste (20%). Foram comparadas as ligações logito, probito e complemento log-log e seis especificações com diferentes estruturas de interações, por testes da razão de verossimilhanças, AIC, BIC e validação cruzada repetida. O modelo final tem ligação logito, com classe, idade, sexo e a interação entre sexo e classe. A chance de sobreviver dos homens foi menor que a das mulheres em todas as classes, e a diferença variou com a classe. A idade reduziu a chance de sobreviver, com o mesmo efeito para os dois sexos. Viajar sozinho não teve efeito detectável depois de considerados os demais fatores, embora duas interações de terceira ordem tenham mostrado indício fraco. No conjunto de teste, o modelo final obteve área sob a curva ROC de 0,83 e acurácia de 75,5%. Os resultados são interpretados como associações observadas na amostra, sem atribuição de causalidade, e as limitações, como as linhas repetidas da base, são discutidas.
 
 \noindent\textbf{Palavras-chave} Modelos lineares generalizados. Titanic. Regressão logística. Sobrevivência. Validação cruzada.
 
@@ -174,7 +174,7 @@ library(tidyverse)
 library(tidymodels)
 tidymodels_prefer()
 theme_set(theme_minimal(base_size = 11))
-options(OutDec = ",", digits = 4)
+options(OutDec = ",", digits = 4, knitr.kable.NA = "--")
 
 numero_pt <- function(x, casas = 2) {
   if (length(x) != 1L || !is.finite(x)) return("não disponível")
@@ -194,7 +194,7 @@ valor_p_texto <- function(x) {
 
 
 # Saídas numéricas em tabelas LaTeX (preserva os gráficos originais).
-tabela_pdf <- function(dados, titulo, digitos = 3) {
+tabela_pdf <- function(dados, titulo, digitos = 3, bruto = FALSE) {
   # Exibe valores-p muito pequenos sem arredondá-los para zero.
   for (nome in intersect(names(dados), c("Valor-p", "p_shapiro"))) {
     p <- dados[[nome]]
@@ -205,6 +205,8 @@ tabela_pdf <- function(dados, titulo, digitos = 3) {
       ))
     )
   }
+  names(dados)[names(dados) == "p_shapiro"] <- "Valor-p"
+  if (bruto) cat("```{=latex}\n")
   cat(
     as.character(
       knitr::kable(
@@ -220,6 +222,7 @@ tabela_pdf <- function(dados, titulo, digitos = 3) {
     ),
     sep = "\n"
   )
+  if (bruto) cat("\n```")
   cat("\n\n")
 }
 
@@ -249,8 +252,9 @@ resumo_ajuste <- function(ajuste, nome) {
         "Desvio residual", "GL residuais", "AIC"
       ),
       Valor = c(
-        nobs(ajuste), ajuste$null.deviance, ajuste$df.null,
-        deviance(ajuste), df.residual(ajuste), AIC(ajuste)
+        as.character(nobs(ajuste)), numero_pt(ajuste$null.deviance, 1),
+        as.character(ajuste$df.null), numero_pt(deviance(ajuste), 1),
+        as.character(df.residual(ajuste)), numero_pt(AIC(ajuste), 1)
       )
     ),
     paste("Medidas de ajuste do modelo", nome)
@@ -270,6 +274,17 @@ arrumar_anova <- function(anova_obj) {
   names(tab) <- sub("^Pr\\(>F\\)$", "Valor-p", names(tab))
   tab
 }
+
+# Versão vetorizada de numero_pt, para formatar colunas de tabelas.
+numeros_pt <- function(x, casas = 2) {
+  vapply(x, numero_pt, character(1), casas = casas)
+}
+
+# Teste da razão de verossimilhanças entre dois modelos encaixados.
+teste_lrt <- function(base, ampliado) {
+  r <- anova(base, ampliado, test = "Chisq")
+  list(dev = r$Deviance[2], gl = r$Df[2], p = r[["Pr(>Chi)"]][2])
+}
 ```
 
 # Introdução
@@ -277,6 +292,8 @@ arrumar_anova <- function(anova_obj) {
 O naufrágio do Titanic, em abril de 1912, oferece um contexto para investigar como diferenças nas condições de viagem se relacionaram à possibilidade de sobrevivência. A insuficiência de lugares nos botes salva-vidas e a prioridade concedida a mulheres e crianças durante a evacuação sugerem que os desfechos não se distribuíram de forma homogênea entre os passageiros. Ainda assim, reconhecer esse contexto histórico não basta para determinar o papel específico de cada característica. É necessário examinar as associações observadas nos dados, levando em conta que sexo, idade, classe da passagem e condição de viajar sozinho podem estar relacionados entre si.
 
 Este estudo utiliza a base `titanic.csv`, composta pela resposta binária `vivo` e pelas variáveis explicativas `classe`, `idade`, `sexo` e `sozinho`. O propósito é compreender quais padrões de associação permanecem após o ajuste simultâneo dessas características e avaliar até que ponto eles contribuem para prever a sobrevivência. Na dimensão inferencial, são examinados os coeficientes dos modelos, suas interações e as razões de chances. Na dimensão preditiva, comparam-se especificações e funções de ligação com base no escore de Brier, na área sob a curva ROC e na acurácia. Para reduzir o otimismo da avaliação, as decisões sobre os modelos são tomadas no conjunto de treinamento, e o conjunto de teste é reservado para a etapa final. As interpretações se referem à amostra estudada e não permitem, por si só, estabelecer relações causais.
+
+A pergunta que organiza o trabalho é a seguinte: quais características dos passageiros estão associadas à sobrevivência e o efeito de uma característica muda conforme outra? O texto segue seis etapas. Primeiro, descrevemos os dados de treinamento e levantamos hipóteses a partir das proporções observadas. Segundo, especificamos os modelos binomiais e comparamos as ligações logito, probito e complemento log-log. Terceiro, testamos as interações e definimos seis modelos candidatos, que são comparados por validação cruzada repetida. Quarto, justificamos a escolha do modelo final e verificamos o papel de viajar sozinho. Quinto, diagnosticamos e interpretamos o modelo final em razões de chances e probabilidades. Sexto, medimos a capacidade preditiva no conjunto de teste, que não participou de nenhuma escolha anterior. As limitações e as conclusões encerram o trabalho.
 
 
 
@@ -306,17 +323,36 @@ informacoes_dados <- data.frame(
 tabela_pdf(informacoes_dados, "Resumo da base de dados")
 
 estrutura_dados <- data.frame(
-  Variavel = names(titanic),
-  Classe = vapply(titanic, function(x) class(x)[1], character(1)),
-  `Valores distintos` = vapply(titanic, dplyr::n_distinct, integer(1)),
+  `Variável` = names(titanic),
+  `Descrição` = c(
+    "Resposta: o passageiro sobreviveu ao naufrágio?",
+    "Classe da passagem",
+    "Idade, em anos",
+    "Sexo do passageiro",
+    "O passageiro viajava sozinho?"
+  ),
+  `Categorias ou valores` = c(
+    paste(levels(titanic$vivo), collapse = ", "),
+    paste(levels(titanic$classe), collapse = ", "),
+    paste0(
+      dplyr::n_distinct(titanic$idade), " valores distintos, de ",
+      numero_pt(min(titanic$idade), 2), " a ",
+      numero_pt(max(titanic$idade), 0), " anos"
+    ),
+    paste(levels(titanic$sexo), collapse = ", "),
+    paste(levels(titanic$sozinho), collapse = ", ")
+  ),
+  `Tipo no R` = vapply(titanic, function(x) class(x)[1], character(1)),
   check.names = FALSE
 )
-tabela_pdf(estrutura_dados, "Estrutura das variáveis")
+tabela_pdf(estrutura_dados, "Variáveis da base de dados")
 ```
 
 A base reúne `r nrow(titanic)` registros de passageiros e cinco variáveis, sem valores ausentes nas colunas examinadas. A ausência de dados faltantes permite trabalhar com todas as observações disponíveis. Foram identificadas `r sum(duplicated(titanic))` linhas com combinações repetidas de características, mas elas não foram removidas. Como o arquivo não contém um identificador individual, duas linhas idênticas podem representar pessoas distintas que compartilham o mesmo perfil. Excluir esses registros poderia reduzir artificialmente a frequência de determinados grupos.
 
 A variável resposta foi codificada como fator, mantendo a categoria `nao` antes de `sim`. As variáveis `classe`, `sexo` e `sozinho` também foram convertidas em fatores. Nos modelos que utilizam a codificação por categoria de referência, a primeira classe, o sexo feminino e a condição de não viajar sozinho constituem os níveis de comparação. A ANOVA tipo III do modelo com interações recebe uma codificação específica, explicada na seção correspondente, sem modificar os dados empregados nos demais ajustes.
+
+As análises foram feitas no software R (`r R.version.string`), com os pacotes `tidyverse` e `tidymodels` e, para a ANOVA tipo III e o diagnóstico de multicolinearidade, o pacote `car`. As sementes aleatórias foram fixadas em 123. Para reproduzir os resultados, basta manter o arquivo `titanic.csv` na mesma pasta deste documento.
 
 # Estratégia de treinamento e avaliação
 
@@ -378,7 +414,7 @@ text(x = pos, y = p, labels = paste0(round(p, 1), "%"),
 #| fig-width: 9
 #| fig-height: 4
 #| fig-align: center
-#| fig-cap: Número e proporção de passageiros sobreviventes
+#| fig-cap: "Número e proporção de passageiros sobreviventes, no conjunto de treinamento."
 par(mfrow = c(1, 2), mar = c(5, 4, 4, 1))
 
 pos <- barplot(
@@ -430,14 +466,14 @@ A exploração descritiva considera as proporções de sobreviventes segundo sex
 
 
 ```{r}
-#| label: fig-Percentual-de-sobreviventes-por-sexo-e-classe
+#| label: fig-marginais-sexo-classe
 #| echo: false
 #| warning: false
 #| message: false
 #| fig-width: 11
 #| fig-height: 4
 #| fig-align: center
-#| fig-cap: Percentual de sobreviventes por sexo e classe
+#| fig-cap: "Percentual de sobreviventes por sexo e por classe, no conjunto de treinamento."
 par(mfrow = c(1, 2), mar = c(5, 4, 4, 1))
 
 p <- prop.table(table(treino$sexo, treino$vivo), margin = 1)[, "sim"] * 100
@@ -475,17 +511,17 @@ text(x = pos, y = p, labels = paste0(round(p, 1), "%"),
 
 \vspace{1cm}
 
-A sobrevivência apresentou diferenças expressivas entre os sexos no conjunto de treinamento. A proporção observada foi de `r porcentagem(mean(treino$vivo[treino$sexo == "feminino"] == "sim"))` entre as mulheres e de `r porcentagem(mean(treino$vivo[treino$sexo == "masculino"] == "sim"))` entre os homens. O contraste é consistente com o relato histórico de prioridade às mulheres na evacuação, embora esse contexto não explique isoladamente a magnitude da diferença. A classe da passagem também mostrou um gradiente relevante. Sobreviveram `r porcentagem(mean(treino$vivo[treino$classe == "I"] == "sim"))` dos passageiros da primeira classe, `r porcentagem(mean(treino$vivo[treino$classe == "II"] == "sim"))` dos da segunda e `r porcentagem(mean(treino$vivo[treino$classe == "III"] == "sim"))` dos da terceira. A figura @fig-Percentual-de-sobreviventes-por-sexo-e-classe evidencia esse padrão, mas não permite determinar quanto dele permanece depois do controle pelas demais características.
+A sobrevivência apresentou diferenças expressivas entre os sexos no conjunto de treinamento. A proporção observada foi de `r porcentagem(mean(treino$vivo[treino$sexo == "feminino"] == "sim"))` entre as mulheres e de `r porcentagem(mean(treino$vivo[treino$sexo == "masculino"] == "sim"))` entre os homens. O contraste é consistente com o relato histórico de prioridade às mulheres na evacuação, embora esse contexto não explique isoladamente a magnitude da diferença. A classe da passagem também mostrou um gradiente relevante. Sobreviveram `r porcentagem(mean(treino$vivo[treino$classe == "I"] == "sim"))` dos passageiros da primeira classe, `r porcentagem(mean(treino$vivo[treino$classe == "II"] == "sim"))` dos da segunda e `r porcentagem(mean(treino$vivo[treino$classe == "III"] == "sim"))` dos da terceira. A @fig-marginais-sexo-classe evidencia esse padrão, mas não permite determinar quanto dele permanece depois do controle pelas demais características.
 
 ```{r}
-#| label: fig-Percentual-de-sobreviventes-segundo-a-condição-de-viaja-sozinho-gera-e-por-sexo
+#| label: fig-sozinho
 #| echo: false
 #| warning: false
 #| message: false
 #| fig-width: 11
 #| fig-height: 4
 #| fig-align: center
-#| fig-cap: Percentual de sobreviventes segundo a condição de viajar sozinho, geral e por sexo
+#| fig-cap: "Percentual de sobreviventes segundo viajar sozinho (esquerda) e número de passageiros por sexo e condição de viajar sozinho (direita)."
 par(mfrow = c(1, 2), mar = c(5, 4, 4, 1))
 
 p <- prop.table(table(treino$sozinho, treino$vivo), margin = 1)[, "sim"] * 100
@@ -529,7 +565,7 @@ legend(
 )
 ```
 
-A condição de viajar sozinho também apresentou associação descritiva com o desfecho. A proporção de sobreviventes foi de `r porcentagem(mean(treino$vivo[treino$sozinho == "nao"] == "sim"))` entre os passageiros acompanhados e de `r porcentagem(mean(treino$vivo[treino$sozinho == "sim"] == "sim"))` entre os que viajavam sozinhos. Essa diferença não deve ser interpretada imediatamente como um efeito independente da companhia durante a viagem. A composição dos grupos segundo o sexo é desigual, como se observa na figura @fig-Percentual-de-sobreviventes-segundo-a-condição-de-viaja-sozinho-gera-e-por-sexo, e parte da associação pode refletir essa distribuição. A etapa de modelagem permite investigar se a variável acrescenta informação depois de consideradas as demais características.
+A condição de viajar sozinho também apresentou associação descritiva com o desfecho. A proporção de sobreviventes foi de `r porcentagem(mean(treino$vivo[treino$sozinho == "nao"] == "sim"))` entre os passageiros acompanhados e de `r porcentagem(mean(treino$vivo[treino$sozinho == "sim"] == "sim"))` entre os que viajavam sozinhos. Essa diferença não deve ser interpretada imediatamente como um efeito independente da companhia durante a viagem. A composição dos grupos segundo o sexo é desigual, como se observa na @fig-sozinho, e parte da associação pode refletir essa distribuição. A etapa de modelagem permite investigar se a variável acrescenta informação depois de consideradas as demais características.
 
 ```{r}
 #| label: fig-sexo-classe
@@ -595,7 +631,7 @@ ggplot(
   )
 ```
 
-A comparação conjunta de sexo e classe, apresentada na figura @fig-sexo-classe, mostra que a vantagem de sobrevivência das mulheres não ocorreu com a mesma intensidade em todas as classes. Entre as passageiras, as proporções foram particularmente elevadas nas duas primeiras classes e diminuíram na terceira. Entre os homens, as diferenças entre as classes também foram marcantes, mas seguiram outro padrão. Esse comportamento sugere que a associação entre classe e sobrevivência pode variar segundo o sexo. Trata-se de uma indicação descritiva de possível interação, que precisa ser examinada nos modelos ajustados e não deve ser confundida com a significância de um termo em uma ANOVA do modelo completo.
+A comparação conjunta de sexo e classe, apresentada na @fig-sexo-classe, mostra que a vantagem de sobrevivência das mulheres não ocorreu com a mesma intensidade em todas as classes. Entre as passageiras, as proporções foram particularmente elevadas nas duas primeiras classes e diminuíram na terceira. Entre os homens, as diferenças entre as classes também foram marcantes, mas seguiram outro padrão. Esse comportamento sugere que a associação entre classe e sobrevivência pode variar segundo o sexo. Trata-se de uma indicação descritiva de possível interação, que precisa ser examinada nos modelos ajustados e não deve ser confundida com a significância de um termo em uma ANOVA do modelo completo.
 
 ```{r}
 #| label: fig-idade
@@ -623,11 +659,23 @@ treino |>
   )
 ```
 
-A mediana da idade foi de `r numero_pt(median(treino$idade[treino$vivo == "sim"]), 0)` anos entre os sobreviventes e de `r numero_pt(median(treino$idade[treino$vivo == "nao"]), 0)` anos entre os não sobreviventes. A proximidade dessas medianas, porém, não significa que a idade tenha pouca relevância para a sobrevivência. A figura @fig-idade revela diferenças entre os sexos que a comparação global não mostra. Entre crianças de até 11 anos, as proporções de sobreviventes dos dois sexos são relativamente próximas. Nas faixas etárias seguintes, a sobrevivência masculina diminui sensivelmente, enquanto as proporções femininas permanecem elevadas em boa parte dos grupos. A leitura da última faixa etária exige cautela porque o número de mulheres mais velhas é pequeno. Esses resultados indicam que a associação com a idade deve ser considerada em conjunto com sexo e classe.
+A mediana da idade foi de `r numero_pt(median(treino$idade[treino$vivo == "sim"]), 0)` anos entre os sobreviventes e de `r numero_pt(median(treino$idade[treino$vivo == "nao"]), 0)` anos entre os não sobreviventes. A proximidade dessas medianas, porém, não significa que a idade tenha pouca relevância para a sobrevivência. A @fig-idade revela diferenças entre os sexos que a comparação global não mostra. Entre crianças de até 11 anos, as proporções de sobreviventes dos dois sexos são relativamente próximas. Nas faixas etárias seguintes, a sobrevivência masculina diminui sensivelmente, enquanto as proporções femininas permanecem elevadas em boa parte dos grupos. A leitura da última faixa etária exige cautela porque o número de mulheres mais velhas é pequeno. Esses resultados indicam que a associação com a idade deve ser considerada em conjunto com sexo e classe.
+
+```{r}
+#| label: composicao-sozinho
+comp_sexo <- prop.table(table(treino$sozinho, treino$sexo), margin = 1)
+comp_classe <- prop.table(table(treino$sozinho, treino$classe), margin = 1)
+```
+
+Para entender a associação bruta de viajar sozinho com a sobrevivência, vale olhar a composição dos grupos. Entre os passageiros que viajavam sozinhos, `r porcentagem(comp_sexo["sim", "masculino"])` eram homens e `r porcentagem(comp_classe["sim", "III"])` eram da terceira classe. Entre os acompanhados, esses percentuais foram `r porcentagem(comp_sexo["nao", "masculino"])` e `r porcentagem(comp_classe["nao", "III"])`. Como ser homem e ser da terceira classe estão associados a menor sobrevivência, a menor sobrevivência de quem viajava sozinho pode refletir, ao menos em parte, essa composição. A modelagem verifica se `sozinho` acrescenta informação depois de considerados sexo, classe e idade.
+
+**Síntese da análise exploratória.** Os dados descritivos sugerem quatro hipóteses para a modelagem: (i) sexo e classe estão fortemente associados à sobrevivência; (ii) a diferença entre os sexos pode variar com a classe, o que sugere uma interação entre sexo e classe; (iii) a idade se associa à sobrevivência de forma diferente para homens e mulheres; e (iv) a associação bruta de `sozinho` pode vir da composição dos grupos.
 
 # Especificação dos modelos binomiais
 
 Como a resposta identifica se cada passageiro sobreviveu ou não, adotou-se a família binomial com uma tentativa por observação, equivalente à distribuição de Bernoulli. A probabilidade de sobrevivência do passageiro $i$ é representada por $\pi_i$. A relação entre essa probabilidade e as variáveis explicativas foi descrita por um preditor linear, cuja interpretação depende da função de ligação utilizada. Foram avaliadas as ligações logito, probito e complemento log-log. A primeira expressa o logaritmo das chances de sobrevivência, a segunda utiliza a função quantílica da distribuição normal padrão, e a terceira estabelece uma relação assimétrica entre o preditor linear e a probabilidade. A comparação entre elas permite investigar se a escolha da ligação altera de modo relevante o ajuste e o desempenho preditivo.
+
+A distribuição de Bernoulli pertence à família exponencial. Sua função de probabilidade pode ser escrita como $f(y;\pi) = \exp\{y \log[\pi/(1-\pi)] + \log(1-\pi)\}$, com parâmetro canônico $\theta = \log[\pi/(1-\pi)]$. A média é $\pi$ e a variância é $\pi(1-\pi)$, de modo que não há parâmetro de dispersão a estimar. A ligação logito é a ligação canônica dessa distribuição, e as ligações probito e complemento log-log são alternativas não canônicas. Os coeficientes são estimados por máxima verossimilhança, por meio da função `glm()` do R, que usa mínimos quadrados reponderados iterativamente.
 
 A especificação inicial considera os efeitos principais de classe, idade, sexo e condição de viajar sozinho. As categorias indicadoras correspondem à segunda e à terceira classes, ao sexo masculino e à condição de viajar sozinho. A primeira classe, o sexo feminino e a condição de viajar acompanhado constituem as categorias de referência nessa parametrização. O modelo aditivo pode ser representado pela expressão a seguir.
 
@@ -672,7 +720,7 @@ for (nome in names(modelos)) {
 
 No conjunto de treinamento, a ligação complemento log-log apresentou AIC de `r numero_pt(aic[["Cloglog"]], 2)`, enquanto o logito e o probito registraram, respectivamente, `r numero_pt(aic[["Logito"]], 2)` e `r numero_pt(aic[["Probito"]], 2)`. A proximidade entre esses valores sugere que a escolha da ligação não produz diferenças acentuadas segundo esse critério. O AIC combina uma medida de ajuste com uma penalização pela quantidade de parâmetros e, por isso, não é uma medida direta de acurácia nem uma demonstração de que determinado modelo preverá melhor novos passageiros. A inspeção das estimativas e de seus erros-padrão indica quais associações aparecem de forma consistente nas três especificações.
 
-O logito foi adotado como referência para o exame dos efeitos e das interações, porque seus coeficientes permitem calcular razões de chances. Essa escolha serve à interpretação e não antecipa a seleção preditiva. A comparação entre as três ligações é retomada na validação cruzada, quando o desempenho é avaliado em observações que não participaram do ajuste de cada partição.
+O logito foi adotado como referência para o exame dos efeitos e das interações, porque seus coeficientes permitem calcular razões de chances. Essa escolha serve à interpretação e não antecipa a seleção preditiva. A comparação entre as três ligações é retomada na validação cruzada, quando o desempenho é avaliado em observações que não participaram do ajuste de cada partição, e novamente no modelo final, porque a ordem de preferência entre as ligações pode mudar quando o preditor linear muda.
 
 # Seleção das variáveis e comparação de especificações
 
@@ -712,29 +760,95 @@ tabela_pdf(
 
 if (is.matrix(res_vif)) {
   tab_vif <- data.frame(
-    Variavel = rownames(res_vif),
+    `Variável` = rownames(res_vif),
     res_vif,
     check.names = FALSE,
     row.names = NULL
   )
 } else {
   tab_vif <- data.frame(
-    Variavel = names(res_vif),
+    `Variável` = names(res_vif),
     VIF = as.numeric(res_vif)
   )
 }
 tabela_pdf(tab_vif, "Diagnóstico de multicolinearidade")
 ```
 
-O procedimento `drop1()` compara o modelo aditivo com alternativas nas quais um termo é retirado de cada vez. A ANOVA tipo III fornece outra forma de examinar a contribuição de cada termo, mantendo os demais na especificação. Neste primeiro estágio, como não foram incluídas interações, os testes de razão de verossimilhanças têm interpretação relativamente direta. Classe, idade e sexo contribuem para o ajuste, enquanto a condição de viajar sozinho não apresenta evidência de contribuição adicional, com valor-p `r valor_p_texto(res_drop1["sozinho", "Pr(>Chi)"])` no teste de exclusão. Esse resultado não demonstra que a companhia seja irrelevante em qualquer circunstância. Ele indica apenas que, no modelo aditivo e na amostra de treinamento, a variável não melhora de forma estatisticamente detectável a descrição da resposta depois do ajuste pelas outras características.
+O procedimento `drop1()` compara o modelo aditivo com alternativas nas quais um termo é retirado de cada vez. A ANOVA tipo III fornece outra forma de examinar a contribuição de cada termo, mantendo os demais na especificação. Sem interações no modelo, as duas tabelas coincidem. Neste primeiro estágio, como não foram incluídas interações, os testes de razão de verossimilhanças têm interpretação relativamente direta. Classe, idade e sexo contribuem para o ajuste, enquanto a condição de viajar sozinho não apresenta evidência de contribuição adicional, com valor-p `r valor_p_texto(res_drop1["sozinho", "Pr(>Chi)"])` no teste de exclusão. Esse resultado não demonstra que a companhia seja irrelevante em qualquer circunstância. Ele indica apenas que, no modelo aditivo e na amostra de treinamento, a variável não melhora de forma estatisticamente detectável a descrição da resposta depois do ajuste pelas outras características.
 
 O diagnóstico de multicolinearidade é apresentado separadamente na tabela de VIF. Para variáveis com mais de um grau de liberdade, a comparação deve considerar o GVIF ajustado pelo número de parâmetros do termo, e não o GVIF bruto isoladamente. A ausência de valores elevados nesse diagnóstico não elimina a possibilidade de instabilidade associada a interações complexas ou grupos com poucas observações, questões consideradas nas etapas posteriores.
 
 ## Análise das interações
 
-Para investigar relações que não podem ser representadas apenas por efeitos aditivos, ajustou-se um modelo contendo todos os efeitos principais e as interações possíveis entre as quatro variáveis, até a quarta ordem. A contribuição dos termos foi examinada por testes de razão de verossimilhanças na ANOVA tipo III, adotando-se nível de significância de 5%. As variáveis categóricas receberam contrastes de soma zero apenas nessa análise, por meio de uma cópia do conjunto de treinamento. Essa decisão permite examinar os termos sob uma parametrização adequada ao teste solicitado sem alterar as categorias de referência usadas nas tabelas de coeficientes e razões de chances dos demais modelos.
+A análise exploratória sugeriu que o efeito de uma característica pode depender de outra. Testamos essa ideia de duas formas. Na primeira, adicionamos as interações entre classe, idade e sexo ao modelo aditivo, uma de cada vez e em sequência, com testes da razão de verossimilhanças entre modelos encaixados. Na segunda, ajustamos um modelo completo, com todas as interações até a quarta ordem, e examinamos a ANOVA tipo III. Como as duas formas respondem a perguntas diferentes, comparamos seus resultados no final da seção.
 
-A interpretação de uma ANOVA tipo III exige cuidado quando o modelo contém interações de ordens diferentes. Nesse caso, cada teste avalia um termo condicionado à permanência dos demais termos no modelo, inclusive daqueles que representam interações mais complexas. Como a idade foi mantida em sua escala original, algumas hipóteses associadas a termos de ordem inferior dependem também do ponto de referência da idade. Não é adequado interpretar isoladamente um valor-p de uma interação dupla como se o modelo não contivesse interações triplas ou de quarta ordem. Essa distinção é especialmente importante ao comparar a ANOVA tipo III com resultados obtidos anteriormente pela ANOVA tipo II, pois as duas abordagens não formulam exatamente as mesmas hipóteses.
+### Interações adicionadas ao modelo aditivo
+
+```{r}
+#| label: interacoes-uma-a-uma
+#| results: asis
+m_base <- glm(vivo ~ classe + idade + sexo, data = treino, family = binomial)
+
+interacoes_teste <- c("classe:sexo", "idade:sexo", "classe:idade")
+nomes_interacoes <- c("Sexo × classe", "Sexo × idade", "Classe × idade")
+
+tab_int_isolada <- map_dfr(seq_along(interacoes_teste), function(i) {
+  m <- update(m_base, as.formula(paste(". ~ . +", interacoes_teste[i])))
+  t <- teste_lrt(m_base, m)
+  tibble(
+    `Interação` = nomes_interacoes[i],
+    `Qui-quadrado LR` = t$dev,
+    GL = t$gl,
+    `Valor-p` = t$p
+  )
+})
+tabela_pdf(
+  tab_int_isolada,
+  "Teste da razão de verossimilhanças para cada interação adicionada isoladamente ao modelo com classe, idade e sexo",
+  digitos = 3
+)
+p_isolada <- setNames(tab_int_isolada$`Valor-p`, c("sc", "si", "ci"))
+```
+
+Quando adicionadas isoladamente, as interações sexo × classe (valor-p `r valor_p_texto(p_isolada["sc"])`) e sexo × idade (valor-p `r valor_p_texto(p_isolada["si"])`) são significativas ao nível de 5%. A interação classe × idade não é (valor-p `r valor_p_texto(p_isolada["ci"])`).
+
+Esses testes olham cada interação isoladamente, e interações diferentes podem explicar a mesma variação. Por isso, também as incluímos em sequência. Cada linha da tabela seguinte testa se o termo novo melhora o modelo da linha anterior.
+
+```{r}
+#| label: interacoes-sequencia
+#| results: asis
+m_cs <- update(m_base, . ~ . + classe:sexo)
+m_cs_is <- update(m_cs, . ~ . + idade:sexo)
+m_cs_is_ci <- update(m_cs_is, . ~ . + classe:idade)
+modelos_seq <- list(m_base, m_cs, m_cs_is, m_cs_is_ci)
+anova_seq <- anova(m_base, m_cs, m_cs_is, m_cs_is_ci, test = "Chisq")
+p_seq <- anova_seq$`Pr(>Chi)`
+
+tabela_pdf(
+  data.frame(
+    Modelo = c(
+      "Classe + idade + sexo", "+ sexo × classe",
+      "+ sexo × idade", "+ classe × idade"
+    ),
+    `Deviance residual` = anova_seq$`Resid. Dev`,
+    GL = anova_seq$Df,
+    `Valor-p` = p_seq,
+    AIC = vapply(modelos_seq, AIC, numeric(1)),
+    BIC = vapply(modelos_seq, BIC, numeric(1)),
+    check.names = FALSE
+  ),
+  "Inclusão sequencial das interações em modelos encaixados. O valor-p compara cada modelo com o da linha anterior",
+  digitos = 2
+)
+```
+
+Depois que sexo × classe entra no modelo, a interação sexo × idade não acrescenta ajuste (valor-p `r valor_p_texto(p_seq[3])`), e a interação classe × idade também não (valor-p `r valor_p_texto(p_seq[4])`). Ou seja, a associação entre sexo e idade que aparecia isoladamente é explicada pela interação entre sexo e classe. O AIC e o BIC são menores no modelo com sexo × classe (`r numero_pt(AIC(m_cs), 1)` e `r numero_pt(BIC(m_cs), 1)`) do que no modelo com as três interações (`r numero_pt(AIC(m_cs_is_ci), 1)` e `r numero_pt(BIC(m_cs_is_ci), 1)`). Pela regra de manter apenas termos com evidência, o modelo indicado até aqui tem classe, idade, sexo e a interação sexo × classe.
+
+### ANOVA tipo III do modelo completo
+
+Para verificar também o papel de `sozinho` e das interações de ordem mais alta, ajustou-se um modelo contendo todos os efeitos principais e as interações possíveis entre as quatro variáveis, até a quarta ordem. A contribuição dos termos foi examinada por testes de razão de verossimilhanças na ANOVA tipo III, adotando-se nível de significância de 5%. As variáveis categóricas receberam contrastes de soma zero apenas nessa análise, por meio de uma cópia do conjunto de treinamento. Essa decisão permite examinar os termos sob uma parametrização adequada ao teste solicitado sem alterar as categorias de referência usadas nas tabelas de coeficientes e razões de chances dos demais modelos.
+
+A interpretação de uma ANOVA tipo III exige cuidado quando o modelo contém interações de ordens diferentes. Nesse caso, cada teste avalia um termo condicionado à permanência dos demais termos no modelo, inclusive daqueles que representam interações mais complexas. Como a idade foi mantida em sua escala original, algumas hipóteses associadas a termos de ordem inferior dependem também do ponto de referência da idade. Não é adequado interpretar isoladamente um valor-p de uma interação dupla como se o modelo não contivesse interações triplas ou de quarta ordem. Essa distinção é especialmente importante ao comparar a ANOVA tipo III com os testes da seção anterior, pois as duas abordagens não formulam as mesmas hipóteses.
 
 ```{r}
 #| label: interacoes-todas
@@ -794,6 +908,8 @@ A ANOVA tipo III revelou que a interpretação das interações não pode ser re
 
 Esses resultados mostram que diferentes combinações das características podem carregar informações relevantes, mas não autorizam concluir que cada interação significativa tenha uma interpretação simples ou independente das demais. Em particular, a evidência obtida para a interação entre classe e sexo na análise exploratória não corresponde necessariamente à hipótese testada para esse termo na ANOVA tipo III do modelo completo. A decisão sobre a especificação final deve levar em conta tanto a coerência da estrutura de interações quanto a capacidade de previsão, e não apenas a seleção de valores-p inferiores a 0,05.
 
+Há uma aparente contradição entre as duas abordagens: a interação sexo × classe é altamente significativa quando adicionada ao modelo aditivo, mas tem valor-p `r valor_p_texto(p_anova_iii("classe:sexo"))` na ANOVA tipo III do modelo completo. Isso acontece porque, no modelo completo, o teste da interação dupla é condicionado à presença das interações de ordem mais alta que a contêm, e o modelo tem 24 parâmetros para `r nrow(treino)` passageiros, muitos deles em combinações de classe, idade, sexo e `sozinho` com poucas observações. Por isso, a ANOVA tipo III do modelo completo não foi usada para decidir quais interações entram no modelo. Essa decisão usa os testes entre modelos encaixados da seção anterior, o AIC, o BIC e a validação cruzada. A ANOVA tipo III serve como alerta de que pode haver estrutura adicional envolvendo `sozinho`, que é verificada na seção sobre o papel de viajar sozinho.
+
 ## Stepwise
 
 ```{r}
@@ -820,26 +936,23 @@ tabela_pdf(
 tabela_pdf(
   data.frame(
     Indicador = c("AIC", "Número de parâmetros estimados"),
-    Valor = c(AIC(fit_step), fit_step$rank)
+    Valor = c(numero_pt(AIC(fit_step), 1), as.character(fit_step$rank))
   ),
   "Resumo do modelo selecionado pelo stepwise"
 )
 ```
 
-O procedimento *stepwise* foi realizado em ambas as direções, tomando como ponto de partida o modelo aditivo e permitindo a inclusão ou exclusão de termos no conjunto de interações especificado. A tabela apresenta a fórmula selecionada e seu AIC, evitando atribuir ao procedimento uma escolha que não tenha sido efetivamente produzida pelo código. Como o método percorre um conjunto de modelos por decisões sucessivas, o resultado depende da fórmula inicial, do espaço de busca e do critério utilizado. A seleção por AIC não corresponde a um teste de significância da ANOVA tipo III e tampouco assegura, por si só, o melhor desempenho em dados novos. Por isso, o resultado foi tratado como uma referência adicional na formação dos candidatos.
+O procedimento *stepwise* foi realizado em ambas as direções, tomando como ponto de partida o modelo aditivo e permitindo a inclusão ou exclusão de termos no conjunto de interações especificado. A tabela apresenta a fórmula selecionada e seu AIC, evitando atribuir ao procedimento uma escolha que não tenha sido efetivamente produzida pelo código. Como o método percorre um conjunto de modelos por decisões sucessivas, o resultado depende da fórmula inicial, do espaço de busca e do critério utilizado. A seleção por AIC não corresponde a um teste de significância da ANOVA tipo III e tampouco assegura, por si só, o melhor desempenho em dados novos. O procedimento selecionou os termos `r paste(termos_step, collapse = ", ")`, com AIC de `r numero_pt(AIC(fit_step), 1)` e `r fit_step$rank` parâmetros. `r ifelse(setequal(termos_step, c("classe", "idade", "sexo", "classe:sexo")), "Esse é o mesmo modelo indicado pela inclusão sequencial das interações, o que reforça a escolha da interação sexo × classe.", "")` Por isso, o resultado foi tratado como uma referência na formação dos candidatos.
 
 ## Modelos candidatos
 
-A comparação preditiva não ficou restrita ao modelo que apresentou termos significativos nos testes. Foram consideradas cinco especificações, preservando a estrutura utilizada no roteiro original. O M1 inclui apenas os efeitos principais de classe, idade e sexo. O M2 acrescenta a interação entre classe e sexo e uma interação de terceira ordem entre classe, idade e a condição de viajar sozinho. O M3 inclui os efeitos principais dessas três primeiras variáveis, as interações duplas entre elas e uma interação tripla entre idade, sexo e a condição de viajar sozinho. O M4 representa a especificação mais abrangente, com efeitos principais e interações até a quarta ordem. Por fim, o M5 considera classe, idade e a condição de viajar sozinho como efeitos principais, além de interações selecionadas entre essas variáveis e o sexo.
+Para a comparação preditiva, foram consideradas seis especificações. O M1 inclui apenas os efeitos principais de classe, idade e sexo. O M2 acrescenta a interação entre classe e sexo e uma interação de terceira ordem entre classe, idade e a condição de viajar sozinho. O M3 inclui os efeitos principais dessas três primeiras variáveis, as interações duplas entre elas e uma interação tripla entre idade, sexo e a condição de viajar sozinho. O M4 representa a especificação mais abrangente, com efeitos principais e interações até a quarta ordem. O M5 considera classe, idade e a condição de viajar sozinho como efeitos principais, além de interações selecionadas entre essas variáveis e o sexo. O M6 inclui os efeitos principais de classe, idade e sexo e a interação entre classe e sexo, isto é, o modelo indicado pela inclusão sequencial das interações e pelo procedimento stepwise.
 
-Há uma limitação importante na formulação de três desses candidatos. M2, M3 e M5 incluem interações triplas sem todos os respectivos termos de ordem inferior, contrariando o princípio usual de hierarquia em modelos de regressão. As expressões foram conservadas para manter a comparabilidade com as etapas já desenvolvidas, mas essa escolha dificulta a interpretação de alguns coeficientes e impede que a versão atual seja tratada como uma seleção hierárquica definitiva. Por esse motivo, as conclusões relativas a esses modelos devem ser consideradas exploratórias. Uma análise confirmatória exigiria reespecificá-los e repetir a comparação preditiva.
+Os modelos M2, M3 e M5 incluem interações triplas sem todos os termos de ordem inferior, o que contraria o princípio da hierarquia e dificulta a interpretação de seus coeficientes. Por isso, eles entram na comparação como alternativas preditivas, mas não são considerados para o modelo final de interpretação. Os modelos M1, M4 e M6 são hierárquicos.
 
 ```{r}
 #| label: candidatos
 #| results: asis
-# As especificações M1--M5 são preservadas do código original.
-# ATENÇÃO: M2, M3 e M5 contêm interações triplas; conferir
-# as descrições e o princípio da hierarquia antes da entrega.
 formulas <- list(
   M1 = vivo ~ classe + idade + sexo,
   M2 = vivo ~ classe + idade + sexo +
@@ -848,36 +961,45 @@ formulas <- list(
     idade:sexo + classe:idade + idade:sexo:sozinho,
   M4 = vivo ~ (classe + idade + sexo + sozinho)^4,
   M5 = vivo ~ classe + idade + sozinho + classe:idade +
-    idade:sexo + idade:sozinho + idade:sexo:sozinho
+    idade:sexo + idade:sozinho + idade:sexo:sozinho,
+  M6 = vivo ~ classe + idade + sexo + classe:sexo
 )
 
 ajustes_candidatos <- lapply(
   formulas,
   function(f) glm(f, data = treino, family = binomial)
 )
+hierarquico <- c(
+  M1 = "Sim", M2 = "Não", M3 = "Não", M4 = "Sim", M5 = "Não", M6 = "Sim"
+)
 comparacao_candidatos <- data.frame(
   Modelo = names(ajustes_candidatos),
+  `Hierárquico` = hierarquico[names(ajustes_candidatos)],
+  `Parâmetros` = vapply(ajustes_candidatos, function(x) x$rank, integer(1)),
   AIC = vapply(ajustes_candidatos, AIC, numeric(1)),
-  Parametros = vapply(ajustes_candidatos, function(x) x$rank, integer(1)),
-  Desvio = vapply(ajustes_candidatos, deviance, numeric(1))
+  BIC = vapply(ajustes_candidatos, BIC, numeric(1)),
+  Desvio = vapply(ajustes_candidatos, deviance, numeric(1)),
+  check.names = FALSE,
+  row.names = NULL
 )
 tabela_pdf(
   comparacao_candidatos,
-  "AIC, número de parâmetros e desvio dos modelos candidatos"
+  "AIC, BIC, número de parâmetros e desvio dos modelos candidatos",
+  digitos = 1
 )
 ```
 
-A comparação inicial dos cinco candidatos reuniu AIC, número de parâmetros estimados e desvio residual. O menor AIC foi observado no modelo `r comparacao_candidatos$Modelo[which.min(comparacao_candidatos$AIC)]`, com valor de `r numero_pt(min(comparacao_candidatos$AIC), 2)`. Uma redução do desvio residual indica melhora do ajuste aos dados utilizados, mas esse ganho deve ser ponderado pelo aumento da complexidade. O AIC incorpora essa penalização e pode, portanto, favorecer uma especificação menos extensa. A tabela é útil para descrever o comportamento dos modelos no treinamento, mas não substitui a avaliação em observações deixadas de fora do ajuste.
+A comparação inicial dos seis candidatos reuniu AIC, BIC, número de parâmetros estimados e desvio residual. O menor AIC foi observado no modelo `r comparacao_candidatos$Modelo[which.min(comparacao_candidatos$AIC)]`, com valor de `r numero_pt(min(comparacao_candidatos$AIC), 2)`, e o menor BIC, no modelo `r comparacao_candidatos$Modelo[which.min(comparacao_candidatos$BIC)]`, com `r numero_pt(min(comparacao_candidatos$BIC), 2)`. Uma redução do desvio residual indica melhora do ajuste aos dados utilizados, mas esse ganho deve ser ponderado pelo aumento da complexidade. O AIC e o BIC incorporam essa penalização, e o BIC penaliza mais. A tabela descreve o comportamento dos modelos no treinamento, mas não substitui a avaliação em observações deixadas de fora do ajuste.
 
 # Validação cruzada
 
-A validação cruzada foi realizada com dez partições estratificadas do conjunto de treinamento. Em cada rodada, nove partes foram utilizadas para o ajuste e a parte restante foi reservada para medir o desempenho, permitindo avaliar as cinco fórmulas sob as três funções de ligação. Como não há hiperparâmetros a sintonizar, foi utilizada a rotina `fit_resamples()`, voltada diretamente à avaliação por reamostragem. As comparações consideram o escore de Brier, que resume o erro quadrático das probabilidades estimadas, a área sob a curva ROC, associada à capacidade de discriminação, e a acurácia, baseada na classificação final. Valores menores do escore de Brier e maiores da AUC e da acurácia indicam melhor desempenho segundo cada métrica, mas as três medidas respondem a aspectos distintos da previsão.
+A validação cruzada foi realizada com dez partições estratificadas do conjunto de treinamento, repetida cinco vezes com partições diferentes. Assim, cada combinação de fórmula e ligação é avaliada em 50 reamostras. Em cada reamostra, nove partes foram utilizadas para o ajuste e a parte restante foi reservada para medir o desempenho. Foram avaliadas as seis fórmulas sob as três funções de ligação, o que dá 18 combinações. Como não há hiperparâmetros a sintonizar, foi utilizada a rotina `fit_resamples()`, voltada diretamente à avaliação por reamostragem. As comparações consideram o escore de Brier, que resume o erro quadrático das probabilidades estimadas, a área sob a curva ROC, associada à capacidade de discriminação, e a acurácia, baseada na classificação final. Valores menores do escore de Brier e maiores da AUC e da acurácia indicam melhor desempenho segundo cada métrica, mas as três medidas respondem a aspectos distintos da previsão. Esta etapa serve para comparar os candidatos. Como usa apenas dados de treinamento, ela não mede a capacidade preditiva final, que é avaliada no conjunto de teste.
 
 ```{r}
 #| label: validacao-cruzada
 #| results: asis
 set.seed(123)
-folds <- vfold_cv(treino, v = 10, strata = vivo)
+folds <- vfold_cv(treino, v = 10, repeats = 5, strata = vivo)
 
 ligacoes <- list(
   logito = logistic_reg() |>
@@ -925,13 +1047,14 @@ tabela_pdf(
   cv |>
     transmute(
       Modelo = modelo,
-      Ligacao = ligacao,
+      `Ligação` = ligacao,
       Brier = mean_brier_class,
       `EP Brier` = std_err_brier_class,
       AUC = mean_roc_auc,
-      Acuracia = mean_accuracy
+      `EP AUC` = std_err_roc_auc,
+      `Acurácia` = mean_accuracy
     ),
-  "Validação cruzada dos candidatos e das funções de ligação",
+  "Validação cruzada repetida dos candidatos e das funções de ligação, ordenada pelo escore de Brier. EP é o erro-padrão da média das 50 reamostras",
   digitos = 4
 )
 ```
@@ -941,9 +1064,13 @@ tabela_pdf(
 brier <- function(m, l = "logito") {
   cv$mean_brier_class[cv$modelo == m & cv$ligacao == l]
 }
+auc_cv <- function(m, l = "logito") {
+  cv$mean_roc_auc[cv$modelo == m & cv$ligacao == l]
+}
+auc_logito <- cv$mean_roc_auc[cv$ligacao == "logito"]
 ```
 
-Entre as quinze combinações avaliadas, o menor escore médio de Brier foi obtido por `r melhor_cv$modelo` com ligação `r melhor_cv$ligacao`, alcançando `r numero_pt(melhor_cv$mean_brier_class, 4)`. Para a ligação logito, os modelos M2, M3 e M4 apresentaram escores médios de `r numero_pt(brier("M2"), 4)`, `r numero_pt(brier("M3"), 4)` e `r numero_pt(brier("M4"), 4)`, respectivamente. A magnitude dessas diferenças deve ser comparada aos erros-padrão apresentados na tabela. Valores próximos não demonstram equivalência estatística entre os modelos, mas sugerem que a vantagem observada em uma única reamostragem pode ser sensível à partição dos dados. Por isso, a avaliação não se limita à identificação mecânica do menor número e considera também a quantidade de parâmetros e a interpretação dos efeitos.
+Entre as `r nrow(cv)` combinações avaliadas, o menor escore médio de Brier foi obtido por `r melhor_cv$modelo` com ligação `r melhor_cv$ligacao`, alcançando `r numero_pt(melhor_cv$mean_brier_class, 4)`. Para a ligação logito, as AUC médias dos seis modelos ficam entre `r numero_pt(min(auc_logito), 4)` e `r numero_pt(max(auc_logito), 4)`, uma diferença de `r numero_pt(max(auc_logito) - min(auc_logito), 4)`, menor que o erro-padrão típico da AUC, de cerca de `r numero_pt(mean(cv$std_err_roc_auc), 3)`. As diferenças de Brier entre os modelos também são pequenas diante dos erros-padrão da tabela. O erro-padrão calculado sobre as reamostras tende a ser otimista, porque elas reutilizam os mesmos passageiros. Assim, a validação cruzada não separa os candidatos com clareza, e a escolha do modelo final deve considerar também a hierarquia, a quantidade de parâmetros e a interpretação dos efeitos.
 
 ```{r}
 #| label: treino-vs-cv
@@ -958,18 +1085,21 @@ tabela_pdf(
   data.frame(
     Modelo = names(brier_treino),
     `Brier no treino` = as.numeric(brier_treino),
+    `Brier na validação cruzada` = vapply(
+      names(brier_treino), brier, numeric(1)
+    ),
     check.names = FALSE
   ),
-  "Escore de Brier dos candidatos no conjunto de treino",
+  "Escore de Brier dos candidatos no próprio treino e na validação cruzada (ligação logito)",
   digitos = 4
 )
 ```
 
-O escore de Brier calculado no próprio treinamento tende a ser mais favorável do que aquele obtido em observações não utilizadas para ajustar os coeficientes. A comparação dessas duas estimativas ajuda a reconhecer modelos que se beneficiam de sua flexibilidade no ajuste, mas não reproduzem necessariamente esse ganho na validação cruzada. O M4 concentra o maior conjunto de interações e possui `r comparacao_candidatos$Parametros[comparacao_candidatos$Modelo == "M4"]` parâmetros estimados. Caso a melhora no treinamento não seja acompanhada por redução consistente do Brier nas partições de validação, a diferença deve ser interpretada como sinal de possível sobreajuste, e não como comprovação definitiva desse fenômeno. Essa leitura reforça a necessidade de ponderar ajuste e generalização.
+O escore de Brier calculado no próprio treinamento tende a ser mais favorável do que aquele obtido em observações não utilizadas para ajustar os coeficientes. A comparação das duas colunas ajuda a reconhecer modelos que se beneficiam de sua flexibilidade no ajuste, mas não reproduzem esse ganho fora da amostra. O M4 concentra o maior conjunto de interações e possui `r comparacao_candidatos$Parâmetros[comparacao_candidatos$Modelo == "M4"]` parâmetros estimados. Seu Brier no treino é `r numero_pt(brier_treino[["M4"]], 4)`, contra `r numero_pt(brier("M4"), 4)` na validação cruzada. A distância entre os dois valores é maior que a do M6 (`r numero_pt(brier_treino[["M6"]], 4)` no treino e `r numero_pt(brier("M6"), 4)` na validação cruzada), o que indica que parte do ganho do M4 no treino vem da flexibilidade do ajuste.
 
 # Diagnóstico dos modelos candidatos
 
-A análise de resíduos foi utilizada para examinar aspectos que as métricas agregadas de previsão podem não revelar. Como a resposta observada é binária, foram calculados resíduos quantílicos aleatorizados para os cinco candidatos com ligação logito. O procedimento utiliza sorteios uniformes em intervalos definidos pela probabilidade ajustada e transforma os valores obtidos pela função quantílica da normal padrão. Sob uma especificação adequada, espera-se que esses resíduos apresentem comportamento aproximadamente compatível com uma distribuição normal padrão e não revelem padrões sistemáticos em função das covariáveis. Como o procedimento contém uma etapa aleatória, a semente foi fixada para garantir a reprodutibilidade dos gráficos e do teste de normalidade.
+A análise de resíduos examina aspectos que as métricas agregadas de previsão podem não revelar. Como a resposta observada é binária, foram calculados resíduos quantílicos aleatorizados para os seis candidatos com ligação logito (Dunn e Smyth, 1996). O procedimento utiliza sorteios uniformes em intervalos definidos pela probabilidade ajustada e transforma os valores obtidos pela função quantílica da normal padrão. Sob uma especificação adequada, espera-se que esses resíduos apresentem comportamento aproximadamente compatível com uma distribuição normal padrão e não revelem padrões sistemáticos em função das covariáveis. Como o procedimento contém uma etapa aleatória, a semente foi fixada para garantir a reprodutibilidade dos gráficos e do teste de normalidade.
 
 ```{r}
 #| label: residuos
@@ -985,10 +1115,7 @@ qresiduo <- function(fit) {
   qnorm(pmin(pmax(u, 1e-12), 1 - 1e-12))
 }
 
-ajustes <- lapply(
-  formulas,
-  function(f) glm(f, data = treino, family = binomial)
-)
+ajustes <- ajustes_candidatos
 
 set.seed(123)
 res <- bind_rows(lapply(names(ajustes), function(m) {
@@ -1002,13 +1129,14 @@ res <- bind_rows(lapply(names(ajustes), function(m) {
 
 tab_shapiro <- res |>
   group_by(modelo) |>
-  summarise(p_shapiro = shapiro.test(rq)$p.value, .groups = "drop")
-tabela_pdf(tab_shapiro, "Teste de Shapiro-Wilk dos resíduos quantílicos")
+  summarise(p_shapiro = shapiro.test(rq)$p.value, .groups = "drop") |>
+  rename(Modelo = modelo)
+tabela_pdf(tab_shapiro, "Teste de Shapiro-Wilk dos resíduos quantílicos dos candidatos")
 ```
 
 ```{r}
 #| label: fig-residuos
-#| fig-cap: "Resíduos quantílicos contra a idade, por sexo, para os cinco candidatos (logito)."
+#| fig-cap: "Resíduos quantílicos contra a idade, por sexo, para os seis candidatos (logito)."
 #| fig-height: 4.5
 ggplot(res, aes(idade, rq, colour = sexo)) +
   geom_point(alpha = 0.25, size = 0.8) +
@@ -1050,7 +1178,7 @@ observado_previsto <- bind_rows(lapply(names(grupos), function(nome) {
 }))
 tabela_pdf(
   observado_previsto,
-  "Sobreviventes observados e previstos em grupos selecionados",
+  "Sobreviventes observados e previstos em grupos selecionados, no conjunto de treino",
   digitos = 1
 )
 
@@ -1068,49 +1196,208 @@ observado_grupo <- function(grupo) {
 
 Os resultados do teste de Shapiro-Wilk estão reunidos na tabela de resíduos quantílicos. Como esses resíduos dependem de um sorteio, o valor-p é sensível à realização aleatória e não deve ser usado como critério isolado para rejeitar ou não rejeitar a normalidade dos resíduos do modelo. A inspeção do gráfico em função da idade e a comparação entre sobreviventes observados e previstos oferecem informações adicionais sobre padrões não capturados pelos ajustes.
 
-Entre as mulheres da segunda classe, o M1 previu aproximadamente `r numero_pt(previsao_grupo("Mulheres 2ª classe", "M1"), 1)` sobreviventes, diante de `r observado_grupo("Mulheres 2ª classe")` observados. Na terceira classe, a previsão foi de `r numero_pt(previsao_grupo("Mulheres 3ª classe", "M1"), 1)` para `r observado_grupo("Mulheres 3ª classe")` observados. A inclusão de interações nos modelos posteriores pode reduzir discrepâncias desse tipo, embora deva ser avaliada conjuntamente com o desempenho fora da amostra. Entre os meninos com menos de 12 anos, foram observados `r observado_grupo("Meninos até 11 anos")` sobreviventes, enquanto o M2 estimou `r numero_pt(previsao_grupo("Meninos até 11 anos", "M2"), 1)`. O comportamento dos resíduos nas idades menores sugere que parte da heterogeneidade da sobrevivência infantil não é plenamente representada. Essa limitação merece atenção porque o número de observações nos subgrupos é reduzido e interações mais complexas podem ajustar particularidades da amostra sem melhorar a previsão em novos casos.
+Nos modelos que incluem a interação entre classe e sexo (M2, M3, M4 e M6), o número previsto de sobreviventes em cada combinação de classe e sexo coincide com o observado. Isso ocorre por construção, pela forma como o modelo logístico é estimado por máxima verossimilhança, e não é evidência de bom ajuste. A comparação é informativa para os modelos sem essa interação e para o grupo de meninos. Entre as mulheres da segunda classe, o M1 previu aproximadamente `r numero_pt(previsao_grupo("Mulheres 2ª classe", "M1"), 1)` sobreviventes, diante de `r observado_grupo("Mulheres 2ª classe")` observados. Na terceira classe, a previsão foi de `r numero_pt(previsao_grupo("Mulheres 3ª classe", "M1"), 1)` para `r observado_grupo("Mulheres 3ª classe")` observados. Esse é um sinal de que o modelo aditivo não representa bem a diferença entre as classes dentro de cada sexo. Entre os meninos com menos de 12 anos, foram observados `r observado_grupo("Meninos até 11 anos")` sobreviventes, enquanto o M6 estimou `r numero_pt(previsao_grupo("Meninos até 11 anos", "M6"), 1)`. O comportamento nas idades menores sugere que parte da heterogeneidade da sobrevivência infantil não é plenamente representada. Essa limitação merece atenção porque o número de observações nos subgrupos é reduzido e interações mais complexas podem ajustar particularidades da amostra sem melhorar a previsão em novos casos.
+
+# Definição do modelo final
+
+A escolha do modelo final combina quatro critérios: a hierarquia dos termos, a evidência estatística de cada termo, o AIC e o BIC, e o desempenho na validação cruzada. A tabela a seguir reúne esses critérios para os seis candidatos com ligação logito.
 
 ```{r}
-#| label: fig-influencia
-#| fig-cap: "Distância de Cook e alavanca das observações do treino no M2."
-#| fig-height: 3
+#| label: decisao
 #| results: asis
-fit_m2 <- ajustes$M2
-p <- fit_m2$rank
-n <- nobs(fit_m2)
-
-infl <- tibble(
-  indice = seq_len(n),
-  cook = cooks.distance(fit_m2),
-  alavanca = hatvalues(fit_m2)
+cv_logito <- cv |> filter(ligacao == "logito")
+tab_decisao <- comparacao_candidatos |>
+  left_join(
+    cv_logito |>
+      transmute(
+        Modelo = modelo,
+        AUC = mean_roc_auc,
+        Brier = mean_brier_class,
+        `Acurácia` = mean_accuracy
+      ),
+    by = "Modelo"
+  ) |>
+  mutate(
+    AIC = numeros_pt(AIC, 1),
+    BIC = numeros_pt(BIC, 1),
+    AUC = numeros_pt(AUC, 4),
+    Brier = numeros_pt(Brier, 4),
+    `Acurácia` = numeros_pt(`Acurácia`, 4)
+  ) |>
+  select(Modelo, `Hierárquico`, `Parâmetros`, AIC, BIC, AUC, Brier, `Acurácia`)
+tabela_pdf(
+  tab_decisao,
+  "Critérios de comparação dos seis candidatos (ligação logito). AUC, Brier e acurácia são médias da validação cruzada repetida"
 )
 
-# A tabela resume as três medidas anteriormente impressas no console.
+lrt_m6_m2 <- teste_lrt(ajustes_candidatos$M6, ajustes_candidatos$M2)
+lrt_m6_m4 <- teste_lrt(ajustes_candidatos$M6, ajustes_candidatos$M4)
+aic_modelo <- setNames(comparacao_candidatos$AIC, comparacao_candidatos$Modelo)
+bic_modelo <- setNames(comparacao_candidatos$BIC, comparacao_candidatos$Modelo)
+```
+
+O modelo final é o **M6**, com ligação logito. Os motivos são os seguintes.
+
+-   O M6 é hierárquico e contém apenas termos com evidência: classe, idade e sexo têm efeito principal forte, e a interação sexo × classe é significativa (valor-p `r valor_p_texto(p_isolada["sc"])` quando adicionada ao modelo aditivo).
+-   O M6 tem o menor AIC (`r numero_pt(aic_modelo[["M6"]], 1)`) e o menor BIC (`r numero_pt(bic_modelo[["M6"]], 1)`) entre os seis candidatos. O AIC do M2 é `r numero_pt(aic_modelo[["M2"]] - aic_modelo[["M6"]], 1)` pontos maior, e o do M4, `r numero_pt(aic_modelo[["M4"]] - aic_modelo[["M6"]], 1)` pontos maior.
+-   Na validação cruzada, as AUC médias dos candidatos são praticamente iguais, e o M6 não fica atrás dos modelos mais complexos. Quando a previsão não distingue os candidatos, prevalece o modelo mais simples e interpretável.
+-   Os termos extras do M2 (cinco parâmetros adicionais, envolvendo `sozinho`) não melhoram o ajuste do M6 de forma detectável (valor-p `r valor_p_texto(lrt_m6_m2$p)`).
+
+> **Atenção: o modelo completo.** O modelo completo (M4) reduz a deviance em relação ao M6 (valor-p `r valor_p_texto(lrt_m6_m4$p)`, com `r lrt_m6_m4$gl` graus de liberdade a mais). Isso indica alguma evidência de estrutura adicional. Mesmo assim, o AIC e o BIC continuam favorecendo o M6, o M4 tem `r comparacao_candidatos$Parâmetros[comparacao_candidatos$Modelo == "M4"]` parâmetros para `r nrow(treino)` passageiros e a validação cruzada não mostra ganho preditivo claro. Tratamos esse resultado como indício que pede cautela, e não como justificativa para um modelo mais complexo.
+
+A escolha do M6 não usou o conjunto de teste, que só é usado na avaliação final.
+
+## Revisão da função de ligação no modelo final
+
+No modelo aditivo, a ligação complemento log-log teve o menor AIC (`r numero_pt(aic[["Cloglog"]], 2)`, contra `r numero_pt(aic[["Logito"]], 2)` do logito). Como a ordem entre as ligações depende do preditor linear, repetimos a comparação com o M6.
+
+```{r}
+#| label: ligacao-final
+#| results: asis
+m6_ligacoes <- list(
+  Logito = ajustes_candidatos$M6,
+  Probito = glm(formulas$M6, data = treino, family = binomial(link = "probit")),
+  Cloglog = glm(formulas$M6, data = treino, family = binomial(link = "cloglog"))
+)
+nome_ligacao <- c(Logito = "logito", Probito = "probito", Cloglog = "cloglog")
+tab_lig_final <- tibble(
+  `Ligação` = names(m6_ligacoes),
+  AIC = unname(vapply(m6_ligacoes, AIC, numeric(1))),
+  BIC = unname(vapply(m6_ligacoes, BIC, numeric(1))),
+  `AUC (validação cruzada)` = unname(vapply(
+    nome_ligacao, function(l) auc_cv("M6", l), numeric(1)
+  )),
+  `Brier (validação cruzada)` = unname(vapply(
+    nome_ligacao, function(l) brier("M6", l), numeric(1)
+  ))
+)
+tabela_pdf(
+  tab_lig_final,
+  "Comparação das ligações no modelo final (M6, conjunto de treino)",
+  digitos = 3
+)
+aic_m6 <- setNames(tab_lig_final$AIC, tab_lig_final$`Ligação`)
+```
+
+Com a interação sexo × classe, o logito tem o menor AIC (`r numero_pt(aic_m6[["Logito"]], 2)`, contra `r numero_pt(aic_m6[["Probito"]], 2)` do probito e `r numero_pt(aic_m6[["Cloglog"]], 2)` do complemento log-log). A vantagem do complemento log-log no modelo aditivo desaparece. Como o logito também é a ligação canônica e permite interpretar os efeitos como razões de chances, ele é mantido.
+
+## O papel de viajar sozinho
+
+Como `sozinho` não teve efeito principal, verificamos se ele entra no modelo por meio de interações. Para isso, testamos `sozinho` e suas interações sobre o M6, com testes da razão de verossimilhanças entre modelos encaixados. As interações de terceira ordem são adicionadas junto com os termos de ordem inferior que as compõem.
+
+```{r}
+#| label: sozinho-final
+#| results: asis
+m6 <- ajustes_candidatos$M6
+m_s <- update(m6, . ~ . + sozinho)
+m_s2 <- update(
+  m6, . ~ . + sozinho + classe:sozinho + sexo:sozinho + idade:sozinho
+)
+m_s3a <- update(m_s2, . ~ . + idade:sexo)
+m_s3b <- update(m_s2, . ~ . + classe:idade)
+
+testes_sozinho <- list(
+  "sozinho" = teste_lrt(m6, m_s),
+  "classe × sozinho" = teste_lrt(m_s, update(m_s, . ~ . + classe:sozinho)),
+  "sexo × sozinho" = teste_lrt(m_s, update(m_s, . ~ . + sexo:sozinho)),
+  "idade × sozinho" = teste_lrt(m_s, update(m_s, . ~ . + idade:sozinho)),
+  "Todos os termos de segunda ordem com sozinho" = teste_lrt(m6, m_s2),
+  "idade × sexo × sozinho" = teste_lrt(
+    m_s3a, update(m_s3a, . ~ . + idade:sexo:sozinho)
+  ),
+  "classe × idade × sozinho" = teste_lrt(
+    m_s3b, update(m_s3b, . ~ . + classe:idade:sozinho)
+  ),
+  "Modelo completo (M4) contra M6" = teste_lrt(m6, ajustes_candidatos$M4)
+)
+tab_sozinho <- tibble(
+  `Termos testados` = names(testes_sozinho),
+  GL = map_dbl(testes_sozinho, "gl"),
+  `Qui-quadrado LR` = map_dbl(testes_sozinho, "dev"),
+  `Valor-p` = map_dbl(testes_sozinho, "p")
+)
+tabela_pdf(
+  tab_sozinho,
+  "Testes da razão de verossimilhanças para sozinho e suas interações, sobre o modelo final (conjunto de treino)",
+  digitos = 3
+)
+p_soz <- setNames(tab_sozinho$`Valor-p`, names(testes_sozinho))
+```
+
+Nenhum termo de segunda ordem envolvendo `sozinho` tem evidência: os valores-p ficam entre `r numero_pt(min(p_soz[1:5]), 3)` e `r numero_pt(max(p_soz[1:5]), 3)`, e o teste conjunto de todos esses termos tem valor-p `r valor_p_texto(p_soz[5])`. As interações de terceira ordem idade × sexo × sozinho (valor-p `r valor_p_texto(p_soz[6])`) e classe × idade × sozinho (valor-p `r valor_p_texto(p_soz[7])`) ficam pouco abaixo de 5%. Esses valores não foram corrigidos para múltiplos testes, e os termos envolvem combinações com poucos passageiros. São justamente esses termos que os modelos M2 e M3 carregam, e esses modelos não têm AIC nem BIC menores que o M6 e não se destacam na validação cruzada. Por isso, `sozinho` e suas interações ficam fora do modelo final. A limitação dessa decisão é discutida no final do trabalho.
+
+> **Atenção: cuidado na interpretação.** O termo `sozinho` não tem efeito detectável quando sexo, idade e classe estão no modelo. Isso não significa que viajar sozinho não tenha relação nenhuma com a sobrevivência. Na análise descritiva, quem viajava sozinho sobreviveu menos. Esse efeito bruto pode vir da composição dos grupos por sexo, idade e classe.
+
+# Diagnóstico do modelo final
+
+O modelo final tem classe, idade, sexo e a interação sexo × classe. Para verificar sua adequação, usamos resíduos quantílicos aleatorizados, o teste de Shapiro-Wilk e medidas de influência.
+
+```{r}
+#| label: diagnostico-final
+#| results: asis
+fit_final <- ajustes_candidatos$M6
+set.seed(123)
+rq_final <- qresiduo(fit_final)
+sw_final <- shapiro.test(rq_final)
+
+n_obs <- nobs(fit_final)
+p_par <- fit_final$rank
+infl <- tibble(
+  indice = seq_len(n_obs),
+  cook = cooks.distance(fit_final),
+  alavanca = hatvalues(fit_final)
+)
 tabela_pdf(
   data.frame(
     Indicador = c(
       "Máxima distância de Cook",
       "Valor de referência F(0,5; p; n-p)",
-      "Observações com alavanca >= 3p/n",
+      "Observações com alavanca acima de 3p/n",
       "Observações com distância de Cook acima de 4/n"
     ),
     Valor = c(
-      max(infl$cook),
-      qf(0.5, p, n - p),
-      sum(infl$alavanca >= 3 * p / n),
-      sum(infl$cook > 4 / n)
+      numero_pt(max(infl$cook), 3),
+      numero_pt(qf(0.5, p_par, n_obs - p_par), 3),
+      as.character(sum(infl$alavanca >= 3 * p_par / n_obs)),
+      as.character(sum(infl$cook > 4 / n_obs))
     )
   ),
-  "Resumo das medidas de influência do modelo M2"
+  "Resumo das medidas de influência do modelo final"
 )
+```
 
+```{r}
+#| label: fig-qq-final
+#| fig-cap: "Gráfico quantil-quantil dos resíduos quantílicos do modelo final."
+#| fig-width: 4.5
+#| fig-height: 3.6
+tibble(rq = rq_final) |>
+  ggplot(aes(sample = rq)) +
+  stat_qq(alpha = 0.5) +
+  stat_qq_line(colour = "firebrick") +
+  labs(x = "Quantis teóricos", y = "Quantis dos resíduos")
+```
+
+```{r}
+#| label: fig-res-ajustado
+#| fig-cap: "Resíduos quantílicos do modelo final contra o preditor linear."
+#| fig-height: 3.6
+tibble(eta = predict(fit_final, type = "link"), rq = rq_final) |>
+  ggplot(aes(eta, rq)) +
+  geom_point(alpha = 0.35) +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Preditor linear", y = "Resíduo quantílico")
+```
+
+```{r}
+#| label: fig-influencia
+#| fig-cap: "Distância de Cook e alavanca das observações do conjunto de treino no modelo final."
+#| fig-height: 3
 infl |>
   pivot_longer(c(cook, alavanca)) |>
   ggplot(aes(indice, value)) +
-  geom_segment(
-    aes(xend = indice, yend = 0),
-    colour = "steelblue"
-  ) +
+  geom_segment(aes(xend = indice, yend = 0), colour = "steelblue") +
   facet_wrap(
     ~name,
     scales = "free_y",
@@ -1121,329 +1408,182 @@ infl |>
   labs(x = "Índice da observação", y = NULL)
 ```
 
-Também foram examinadas medidas de influência do M2. A distância de Cook sintetiza quanto um ajuste pode ser afetado pela presença de determinada observação, enquanto a alavanca descreve o posicionamento do perfil do passageiro em relação aos demais preditores. A maior distância de Cook foi de `r numero_pt(max(infl$cook), 4)`, e `r sum(infl$alavanca >= 3 * p / n)` observações ultrapassaram a referência de alavanca $3p/n$. A tabela também apresenta a quantidade de distâncias de Cook superiores a $4/n$, utilizada como regra prática de triagem. Esses limites não são testes definitivos de influência. A interpretação deve levar em conta as características dos passageiros identificados, especialmente quando determinadas combinações de classe, sexo e idade aparecem poucas vezes nos dados.
-
-# Definição do modelo de referência
-
-O M2 com ligação logito foi mantido como modelo de referência para a etapa final, em continuidade à especificação utilizada no roteiro original. Seu AIC no treinamento foi de `r numero_pt(comparacao_candidatos$AIC[comparacao_candidatos$Modelo == "M2"], 2)` e seu escore médio de Brier na validação cruzada foi de `r numero_pt(brier("M2"), 4)`. A opção pelo logito favorece a apresentação de razões de chances, enquanto a validação cruzada oferece um parâmetro para julgar a qualidade das previsões. Essa escolha não deve ser interpretada como prova de superioridade estatística do M2 sobre todos os demais candidatos. Além disso, sua fórmula conserva uma interação tripla sem a estrutura hierárquica completa, o que restringe a interpretação dos coeficientes. Os resultados seguintes são, portanto, uma avaliação do modelo de referência especificado, e não uma validação definitiva da melhor estrutura possível para a resposta.
-
-# Avaliação preditiva na amostra de teste
-
-A avaliação final foi realizada no conjunto de teste, mantido fora das etapas de exploração, seleção e comparação dos modelos. A função `last_fit()` reajusta o M2 com ligação logito utilizando o conjunto completo de treinamento e calcula as previsões para os registros separados no início da análise. Esse procedimento fornece uma medida de desempenho em uma amostra não utilizada diretamente para estimar os coeficientes nem para escolher entre os candidatos. A interpretação ainda deve considerar a dimensão relativamente pequena do conjunto de teste e a variabilidade inerente a uma única divisão dos dados.
-
 ```{r}
-#| label: teste
-#| results: asis
-wf_final <- workflow() |>
-  add_formula(formulas$M2) |>
-  add_model(ligacoes$logito)
-final_res <- last_fit(wf_final, split, metrics = metricas)
-
-met_teste <- collect_metrics(final_res)
-tabela_pdf(
-  met_teste |>
-    transmute(Metrica = .metric, Estimativa = .estimate),
-  "Medidas de desempenho no conjunto de teste",
-  digitos = 4
-)
-
-tabela_pdf(
-  cv |>
-    filter(modelo == "M2", ligacao == "logito") |>
-    transmute(
-      Modelo = modelo,
-      Ligacao = ligacao,
-      Brier = mean_brier_class,
-      AUC = mean_roc_auc,
-      Acuracia = mean_accuracy
-    ),
-  "Validação cruzada do modelo final",
-  digitos = 4
-)
-
-preds <- collect_predictions(final_res)
-matriz_confusao <- conf_mat(
-  preds,
-  truth = vivo,
-  estimate = .pred_class
-)
-tab_confusao <- as.data.frame(matriz_confusao$table)
-names(tab_confusao) <- c("Previsto", "Real", "Frequencia")
-tabela_pdf(tab_confusao, "Matriz de confusão no conjunto de teste", digitos = 0)
-
-tab_sens_esp <- bind_rows(
-  sensitivity(
-    preds,
-    truth = vivo,
-    estimate = .pred_class,
-    event_level = "second"
-  ),
-  specificity(
-    preds,
-    truth = vivo,
-    estimate = .pred_class,
-    event_level = "second"
-  )
-)
-tabela_pdf(
-  tab_sens_esp |>
-    transmute(Metrica = .metric, Estimativa = .estimate),
-  "Sensibilidade e especificidade para sobrevivência",
-  digitos = 4
-)
-
-sens_teste <- tab_sens_esp$.estimate[tab_sens_esp$.metric == "sens"]
-esp_teste <- tab_sens_esp$.estimate[tab_sens_esp$.metric == "spec"]
+#| label: n-alavanca
+n_alavanca <- sum(infl$alavanca >= 3 * p_par / n_obs)
 ```
 
-```{r}
-#| label: resumo-teste
-met_teste <- collect_metrics(final_res)
-met <- function(nome) {
-  met_teste$.estimate[met_teste$.metric == nome]
-}
-```
-
-No conjunto de teste, a área sob a curva ROC foi de `r numero_pt(met("roc_auc"), 3)`, o escore de Brier alcançou `r numero_pt(met("brier_class"), 3)` e a acurácia foi de `r porcentagem(met("accuracy"))`. A AUC resume a capacidade de ordenar passageiros segundo suas probabilidades estimadas, enquanto o Brier avalia a distância entre essas probabilidades e os resultados observados. A acurácia depende adicionalmente do ponto de corte utilizado para converter probabilidades em categorias. O Brier obtido no teste pode ser confrontado com a média de `r numero_pt(brier("M2"), 3)` observada na validação cruzada, mas diferenças entre essas medidas não devem ser atribuídas automaticamente a sobreajuste. Com `r nrow(teste)` passageiros no teste, parte da discrepância pode decorrer da composição aleatória da amostra.
-
-A matriz de confusão permite examinar quais tipos de classificação foram realizados corretamente. Considerando a sobrevivência como evento de interesse e o ponto de corte de 0,5, a sensibilidade foi de `r porcentagem(sens_teste)` e a especificidade de `r porcentagem(esp_teste)`. A primeira representa a proporção de sobreviventes identificados corretamente, enquanto a segunda corresponde à proporção de não sobreviventes classificados de modo adequado. A diferença entre essas medidas mostra que a mesma acurácia global pode esconder resultados distintos para cada grupo. A curva ROC da figura @fig-roc apresenta o compromisso entre sensibilidade e taxa de falsos positivos em diferentes pontos de corte. A escolha de outro limiar alteraria o equilíbrio entre erros, sem mudar as probabilidades estimadas pelo modelo.
-
-```{r}
-#| label: fig-roc
-#| fig-cap: "Curva ROC no conjunto de teste."
-#| fig-width: 4.5
-#| fig-height: 4.5
-preds |>
-  roc_curve(
-    truth = vivo,
-    .pred_sim,
-    event_level = "second"
-  ) |>
-  autoplot()
-```
+O teste de Shapiro-Wilk dos resíduos quantílicos tem valor-p `r valor_p_texto(sw_final$p.value)`, de modo que `r ifelse(sw_final$p.value > 0.05, "não há evidência contra a normalidade", "há evidência contra a normalidade")`. Como esses resíduos dependem de um sorteio, esse valor-p é sensível à realização aleatória e deve ser lido junto com os gráficos. Na @fig-qq-final, os pontos seguem a reta de referência, com um pequeno afastamento na cauda superior. Na @fig-res-ajustado, os resíduos se espalham em torno de zero e a curva suavizada fica perto da linha tracejada, sem tendência sistemática em função do preditor linear. Na @fig-residuos, o painel do M6 mostra resíduos centrados em zero na maior parte das idades, com afastamentos apenas nas pontas, onde há poucos passageiros. A maior distância de Cook foi de `r numero_pt(max(infl$cook), 3)`, `r ifelse(max(infl$cook) < qf(0.5, p_par, n_obs - p_par), "bem abaixo", "acima")` do valor de referência de `r numero_pt(qf(0.5, p_par, n_obs - p_par), 3)`, e `r n_alavanca` `r ifelse(n_alavanca == 1, "observação ultrapassou", "observações ultrapassaram")` a referência de alavanca $3p/n$. Esses limites são regras práticas de triagem, e não testes definitivos de influência.
 
 # Interpretação dos efeitos estimados
+
+O modelo final, com a ligação logito, é
+
+$$
+\begin{aligned}
+\log\left(\frac{\pi_i}{1-\pi_i}\right)
+&= \beta_0 + \beta_1\,\text{classe}_{II,i} + \beta_2\,\text{classe}_{III,i} + \beta_3\,\text{idade}_i \\
+&\quad + \beta_4\,\text{sexo}_{masc,i} + \beta_5\,\text{classe}_{II,i}\,\text{sexo}_{masc,i} \\
+&\quad + \beta_6\,\text{classe}_{III,i}\,\text{sexo}_{masc,i},
+\end{aligned}
+$$
+
+em que as categorias de referência são a primeira classe e o sexo feminino. A tabela de coeficientes e as medidas de ajuste são apresentadas a seguir.
 
 ```{r}
 #| label: modelo-final
 #| results: asis
-resumo_ajuste(fit_m2, "M2 (logito)")
+resumo_ajuste(fit_final, "final (logito)")
+t_global <- list(
+  dev = fit_final$null.deviance - deviance(fit_final),
+  gl = fit_final$df.null - fit_final$df.residual
+)
+p_global <- pchisq(t_global$dev, t_global$gl, lower.tail = FALSE)
 ```
 
-No modelo logito, o sinal de um coeficiente informa a direção de sua associação com o logaritmo das chances, condicionada aos demais termos da especificação. Quando existem interações, entretanto, o efeito de uma variável não pode ser resumido necessariamente por um único coeficiente. O M2 contém uma interação entre classe e sexo e outra entre classe, idade e a condição de viajar sozinho. Dessa forma, a comparação entre homens e mulheres deve levar em conta a classe, e algumas comparações entre classes e idades podem depender também da condição de viagem. Foram calculadas razões de chances com intervalos de confiança de 95% a partir de combinações dos coeficientes e de sua matriz de covariâncias. A interpretação é sempre condicional aos perfis definidos para a comparação e deve reconhecer que a falta de termos hierarquicamente inferiores na fórmula restringe a leitura substantiva de certos contrastes.
+Em relação ao modelo apenas com o intercepto, o modelo final reduz a deviance em `r numero_pt(t_global$dev, 2)`, com `r t_global$gl` graus de liberdade (valor-p `r valor_p_texto(p_global)`). Como há interação, o coeficiente de sexo masculino vale apenas para a primeira classe, e os coeficientes de classe valem apenas para as mulheres. Por isso, a interpretação é feita por razões de chances (RC) que combinam os coeficientes. A RC associada a um coeficiente é $\exp(\beta)$, e a variação percentual na chance é $100 \times [\exp(\beta) - 1]\%$. Valores de RC menores que 1 indicam menor chance de sobreviver. As combinações de interesse são:
+
+-   homens contra mulheres: $\exp(\beta_4)$ na classe I, $\exp(\beta_4 + \beta_5)$ na classe II e $\exp(\beta_4 + \beta_6)$ na classe III;
+-   classe II ou III contra classe I: $\exp(\beta_1)$ ou $\exp(\beta_2)$ para mulheres, e $\exp(\beta_1 + \beta_5)$ ou $\exp(\beta_2 + \beta_6)$ para homens;
+-   idade: $\exp(10\,\beta_3)$ para dez anos a mais. Como a idade não interage com sexo nem com classe, esse efeito é o mesmo para todos os passageiros.
+
+Cada RC é a exponencial de uma combinação linear $w^\top\hat\beta$ dos coeficientes, e o intervalo de confiança de 95% usa o erro-padrão $\sqrt{w^\top \hat V w}$, em que $\hat V$ é a matriz de covariâncias estimada dos coeficientes.
 
 ```{r}
-#| label: razoes-chances
+#| label: rc-final
 #| results: asis
-b <- coef(fit_m2)
-V <- vcov(fit_m2)
-Xfit <- model.matrix(fit_m2)
-S <- svd(
-  Xfit * sqrt(fit_m2$weights),
-  nu = 0,
-  nv = ncol(Xfit)
-)
-nulo <- if (fit_m2$rank < ncol(Xfit)) {
-  S$v[, (fit_m2$rank + 1):ncol(Xfit), drop = FALSE]
-} else {
-  matrix(0, nrow = ncol(Xfit), ncol = 0)
-}
-sozinhos <- fit_m2$xlevels$sozinho
-if (is.null(sozinhos)) {
-  sozinhos <- sort(unique(treino$sozinho))
-}
+b <- coef(fit_final)
+V <- vcov(fit_final)
 
-# Matriz do modelo para cada perfil.
-perfil <- function(classe, idade, sexo, sozinho) {
-  novo <- data.frame(
-    classe = classe,
-    idade = idade,
-    sexo = sexo,
-    sozinho = sozinho
-  )
-  for (nome in names(fit_m2$xlevels)) {
-    novo[[nome]] <- factor(
-      novo[[nome]],
-      levels = fit_m2$xlevels[[nome]]
-    )
-  }
-  X <- model.matrix(
-    delete.response(terms(fit_m2)),
-    novo,
-    contrasts.arg = fit_m2$contrasts
-  )
-  as.numeric(X[1, names(b), drop = TRUE])
-}
-
-# Razão de chances da combinação a'b e IC de 95%.
-rc <- function(a) {
-  a <- as.numeric(a)
-  erro <- if (ncol(nulo) > 0) {
-    max(abs(crossprod(nulo, a)))
-  } else {
-    0
-  }
-  if (!is.finite(erro) || erro > 1e-7 * (1 + max(abs(a)))) {
-    return(c(RC = NA_real_, li = NA_real_, ls = NA_real_))
-  }
-  valido <- !is.na(b)
-  a <- a[valido]
-  est <- sum(a * b[valido])
-  variancia <- drop(
-    t(a) %*% V[valido, valido, drop = FALSE] %*% a
-  )
-  if (!is.finite(est) || !is.finite(variancia) || variancia < -1e-8) {
-    return(c(RC = NA_real_, li = NA_real_, ls = NA_real_))
-  }
-  ep <- sqrt(max(0, variancia))
-  round(
-    exp(c(RC = est, li = est - 1.96 * ep, ls = est + 1.96 * ep)),
-    3
+rc_comb <- function(pesos) {
+  w <- setNames(rep(0, length(b)), names(b))
+  w[names(pesos)] <- pesos
+  est <- sum(w * b)
+  ep <- sqrt(drop(t(w) %*% V %*% w))
+  tibble(
+    RC = exp(est),
+    inf = exp(est - qnorm(0.975) * ep),
+    sup = exp(est + qnorm(0.975) * ep),
+    p = 2 * pnorm(-abs(est / ep))
   )
 }
 
-# Previsão apenas para perfis estimáveis.
-prever <- function(novos) {
-  novos <- as.data.frame(novos)
-  for (nome in names(fit_m2$xlevels)) {
-    novos[[nome]] <- factor(
-      novos[[nome]],
-      levels = fit_m2$xlevels[[nome]]
-    )
-  }
-  X <- model.matrix(
-    delete.response(terms(fit_m2)),
-    novos,
-    contrasts.arg = fit_m2$contrasts
-  )
-  X <- X[, names(b), drop = FALSE]
-  estimavel <- if (ncol(nulo) > 0) {
-    rowSums(abs(X %*% nulo)) <= 1e-7 * (1 + rowSums(abs(X)))
-  } else {
-    rep(TRUE, nrow(X))
-  }
-  prob <- rep(NA_real_, nrow(novos))
-  if (any(estimavel)) {
-    prob[estimavel] <- predict(
-      fit_m2,
-      newdata = novos[estimavel, , drop = FALSE],
-      type = "response"
-    )
-  }
-  prob
-}
+tabela_rc <- bind_rows(
+  rc_comb(c("sexomasculino" = 1)) |>
+    mutate(Comparacao = "Masculino vs. feminino", Grupo = "Classe I"),
+  rc_comb(c("sexomasculino" = 1, "classeII:sexomasculino" = 1)) |>
+    mutate(Comparacao = "Masculino vs. feminino", Grupo = "Classe II"),
+  rc_comb(c("sexomasculino" = 1, "classeIII:sexomasculino" = 1)) |>
+    mutate(Comparacao = "Masculino vs. feminino", Grupo = "Classe III"),
+  rc_comb(c("classeII" = 1)) |>
+    mutate(Comparacao = "Classe II vs. I", Grupo = "Mulheres"),
+  rc_comb(c("classeII" = 1, "classeII:sexomasculino" = 1)) |>
+    mutate(Comparacao = "Classe II vs. I", Grupo = "Homens"),
+  rc_comb(c("classeIII" = 1)) |>
+    mutate(Comparacao = "Classe III vs. I", Grupo = "Mulheres"),
+  rc_comb(c("classeIII" = 1, "classeIII:sexomasculino" = 1)) |>
+    mutate(Comparacao = "Classe III vs. I", Grupo = "Homens"),
+  rc_comb(c("idade" = 10)) |>
+    mutate(Comparacao = "Idade (+10 anos)", Grupo = "Todos")
+) |>
+  mutate(Variacao = 100 * (RC - 1))
 
-# Homens x mulheres em cada classe, aos 30 anos.
-rc_sexo <- rbind(
-  "1ª classe" = rc(
-    perfil("I", 30, "masculino", sozinhos[1]) -
-      perfil("I", 30, "feminino", sozinhos[1])
-  ),
-  "2ª classe" = rc(
-    perfil("II", 30, "masculino", sozinhos[1]) -
-      perfil("II", 30, "feminino", sozinhos[1])
-  ),
-  "3ª classe" = rc(
-    perfil("III", 30, "masculino", sozinhos[1]) -
-      perfil("III", 30, "feminino", sozinhos[1])
-  )
-)
 tabela_pdf(
-  data.frame(Comparacao = rownames(rc_sexo), rc_sexo,
-             row.names = NULL, check.names = FALSE),
-  "Razões de chances dos homens em comparação às mulheres"
+  tabela_rc |>
+    transmute(
+      `Comparação` = Comparacao,
+      Grupo,
+      RC = numeros_pt(RC, 3),
+      `IC 95%` = paste0("[", numeros_pt(inf, 3), "; ", numeros_pt(sup, 3), "]"),
+      `Var. (%)` = numeros_pt(Variacao, 1),
+      `Valor-p` = p
+    ),
+  "Razões de chances (RC) do modelo final, com intervalos de confiança de 95\\% e variação percentual na chance (Var.)"
 )
 
-# 2ª e 3ª classe x 1ª classe, aos 30 anos, por sexo e sozinho.
-combinacoes <- expand.grid(
-  classe = c("II", "III"),
-  sexo = c("feminino", "masculino"),
-  sozinho = sozinhos,
-  stringsAsFactors = FALSE
-)
-resultado <- do.call(rbind, lapply(seq_len(nrow(combinacoes)), function(i) {
-  x <- combinacoes[i, ]
-  rc(
-    perfil(x$classe, 30, x$sexo, x$sozinho) -
-      perfil("I", 30, x$sexo, x$sozinho)
-  )
-}))
-rownames(resultado) <- paste(
-  combinacoes$sexo, combinacoes$classe,
-  combinacoes$sozinho, sep = ", "
-)
-rc_classe <- resultado
-tabela_pdf(
-  data.frame(Comparacao = rownames(resultado), resultado,
-             row.names = NULL, check.names = FALSE),
-  "Razões de chances de classe em comparação à primeira classe"
-)
-
-# Dez anos a mais de idade, por classe e sozinho.
-combinacoes <- expand.grid(
-  classe = c("I", "II", "III"),
-  sozinho = sozinhos,
-  stringsAsFactors = FALSE
-)
-resultado <- do.call(rbind, lapply(seq_len(nrow(combinacoes)), function(i) {
-  x <- combinacoes[i, ]
-  rc(
-    perfil(x$classe, 40, "feminino", x$sozinho) -
-      perfil(x$classe, 30, "feminino", x$sozinho)
-  )
-}))
-rownames(resultado) <- paste(
-  combinacoes$classe, combinacoes$sozinho, sep = ", "
-)
-rc_idade <- resultado
-tabela_pdf(
-  data.frame(Perfil = rownames(resultado), resultado,
-             row.names = NULL, check.names = FALSE),
-  "Razões de chances para dez anos adicionais de idade"
-)
+rc_val <- function(comp, grupo, coluna = "RC") {
+  tabela_rc |>
+    filter(Comparacao == comp, Grupo == grupo) |>
+    pull(all_of(coluna))
+}
+reducao <- function(comp, grupo) {
+  numero_pt(100 * (1 - rc_val(comp, grupo)), 1)
+}
 ```
 
-A primeira tabela apresenta a razão de chances dos homens em relação às mulheres dentro de cada classe, fixando a idade em 30 anos e considerando a categoria de referência da condição de viajar sozinho. Uma razão inferior a 1 indica menores chances de sobrevivência para os homens naquele perfil, mas não deve ser confundida com a mesma redução percentual da probabilidade. A segunda tabela compara a segunda e a terceira classes com a primeira para diferentes combinações de sexo e condição de viagem. A terceira mostra as razões de chances correspondentes ao acréscimo de dez anos de idade. Como o M2 inclui interações com a classe e a idade, essas estimativas não devem ser generalizadas para todos os grupos sem considerar os termos que compõem cada contraste.
+A @fig-forest mostra as mesmas razões de chances em forma gráfica. A escala é logarítmica, e a linha pontilhada em 1 marca o ponto de nenhum efeito.
 
-Os intervalos de confiança complementam as estimativas pontuais, pois evidenciam a precisão de cada comparação. Intervalos amplos sugerem maior incerteza, particularmente em grupos com poucas observações. Sempre que uma razão de chances não puder ser estimada de forma estável, a apresentação de um valor ausente na tabela é preferível à interpretação de uma estimativa sem suporte suficiente nos dados.
+```{r}
+#| label: fig-forest
+#| fig-cap: "Razões de chances do modelo final, com intervalo de confiança de 95%. Escala logarítmica."
+#| fig-width: 6.5
+#| fig-height: 3.8
+tabela_rc |>
+  mutate(rotulo = fct_rev(fct_inorder(paste0(Comparacao, " (", Grupo, ")")))) |>
+  ggplot(aes(x = RC, y = rotulo)) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "grey40") +
+  geom_pointrange(aes(xmin = inf, xmax = sup)) +
+  scale_x_log10() +
+  labs(x = "Razão de chances (escala log)", y = NULL)
+```
+
+**Sexo.** Em todas as classes, os homens tiveram chance de sobreviver muito menor que as mulheres, e a diferença muda com a classe. Na classe I, a chance dos homens foi `r reducao("Masculino vs. feminino", "Classe I")`% menor. Na classe II, foi `r reducao("Masculino vs. feminino", "Classe II")`% menor. Na classe III, foi `r reducao("Masculino vs. feminino", "Classe III")`% menor, a menor desvantagem entre as três. Essa mudança é a interação entre sexo e classe.
+
+**Classe.** Entre as mulheres, a chance da classe II foi `r reducao("Classe II vs. I", "Mulheres")`% menor que a da classe I (RC = `r numero_pt(rc_val("Classe II vs. I", "Mulheres"), 3)`, valor-p `r valor_p_texto(rc_val("Classe II vs. I", "Mulheres", "p"))`), e a das mulheres da classe III foi `r reducao("Classe III vs. I", "Mulheres")`% menor. Entre os homens, a chance da classe II foi `r reducao("Classe II vs. I", "Homens")`% menor e a da classe III foi `r reducao("Classe III vs. I", "Homens")`% menor que a da classe I.
+
+**Idade.** A idade reduz a chance de sobreviver. Para dez anos a mais, a chance cai `r reducao("Idade (+10 anos)", "Todos")`% (RC = `r numero_pt(rc_val("Idade (+10 anos)", "Todos"), 3)`, IC de 95% de `r numero_pt(rc_val("Idade (+10 anos)", "Todos", "inf"), 3)` a `r numero_pt(rc_val("Idade (+10 anos)", "Todos", "sup"), 3)`). Esse efeito é o mesmo para homens e mulheres e para todas as classes, porque o modelo não tem interação entre idade e as outras variáveis.
+
+Uma razão de chances baixa não significa que a probabilidade de sobreviver seja multiplicada pelo mesmo fator. Por isso, a tabela e a figura a seguir mostram as probabilidades previstas pelo modelo.
 
 ```{r}
 #| label: probabilidades
 #| results: asis
 perfis <- expand_grid(
-  classe = c("I", "II", "III"),
-  sexo = c("feminino", "masculino"),
-  idade = c(5, 30, 60),
-  sozinho = sozinhos
-)
-perfis$prob <- round(prever(perfis), 3)
-tab_probabilidades <- perfis |>
-  pivot_wider(
-    names_from = idade,
-    values_from = prob,
-    names_prefix = "idade_"
+  classe = levels(treino$classe),
+  sexo = levels(treino$sexo),
+  idade = c(5, 30, 60)
+) |>
+  mutate(
+    classe = factor(classe, levels = levels(treino$classe)),
+    sexo = factor(sexo, levels = levels(treino$sexo))
   )
+perfis$prob <- predict(fit_final, newdata = perfis, type = "response")
+
 tabela_pdf(
-  tab_probabilidades,
-  "Probabilidades previstas por perfil dos passageiros"
+  perfis |>
+    mutate(prob = vapply(prob, porcentagem, character(1))) |>
+    pivot_wider(
+      names_from = idade,
+      values_from = prob,
+      names_glue = "{idade} anos"
+    ) |>
+    rename(Classe = classe, Sexo = sexo),
+  "Probabilidade prevista de sobreviver, por classe, sexo e idade (modelo final)"
 )
+
+prob_perfil <- function(cl, sx, id) {
+  perfis$prob[perfis$classe == cl & perfis$sexo == sx & perfis$idade == id]
+}
 ```
 
 ```{r}
 #| label: fig-probabilidades
-#| fig-cap: "Probabilidade prevista de sobreviver segundo idade, classe, sexo e condição de viajar sozinho (M2)."
-#| fig-height: 4.5
+#| fig-cap: "Probabilidade prevista de sobreviver segundo idade, classe e sexo (modelo final)."
+#| fig-height: 4
 grade <- expand_grid(
   idade = 0:80,
-  classe = c("I", "II", "III"),
-  sexo = c("feminino", "masculino"),
-  sozinho = sozinhos
-)
-grade$prob <- prever(grade)
+  classe = levels(treino$classe),
+  sexo = levels(treino$sexo)
+) |>
+  mutate(
+    classe = factor(classe, levels = levels(treino$classe)),
+    sexo = factor(sexo, levels = levels(treino$sexo))
+  )
+grade$prob <- predict(fit_final, newdata = grade, type = "response")
 
 ggplot(grade, aes(idade, prob, colour = classe)) +
-  geom_line(linewidth = 0.9, na.rm = TRUE) +
-  facet_grid(sozinho ~ sexo) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~sexo) +
   scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
   labs(
     x = "Idade (anos)",
@@ -1452,20 +1592,131 @@ ggplot(grade, aes(idade, prob, colour = classe)) +
   )
 ```
 
-A representação em probabilidades torna mais intuitivas as diferenças entre perfis, embora não elimine as limitações da especificação. A figura @fig-probabilidades apresenta a variação das estimativas com a idade, separando os passageiros segundo sexo, classe e condição de viajar sozinho. As tabelas oferecem valores para idades selecionadas, o que facilita a comparação sem depender apenas da leitura visual das curvas. Uma razão de chances elevada não significa que a probabilidade de sobrevivência seja multiplicada pelo mesmo fator, especialmente quando as probabilidades de referência já são altas.
+Aos 30 anos, a mulher da primeira classe tem probabilidade prevista de `r porcentagem(prob_perfil("I", "feminino", 30))`, e o homem da primeira classe, de `r porcentagem(prob_perfil("I", "masculino", 30))`. Na terceira classe, a mulher tem `r porcentagem(prob_perfil("III", "feminino", 30))` e o homem, `r porcentagem(prob_perfil("III", "masculino", 30))`. A probabilidade prevista da mulher da terceira classe é `r ifelse(prob_perfil("III", "feminino", 30) < prob_perfil("I", "masculino", 30), "menor", "maior")` que a do homem da primeira classe, o que mostra que sexo e classe não atuam de forma separada. As curvas da @fig-probabilidades são menos confiáveis nas idades com poucos passageiros no treino (apenas `r sum(treino$idade > 70)` acima de 70 anos). Elas descrevem a relação estimada na amostra e não previsões certas sobre indivíduos específicos.
 
-Na interpretação dessas curvas, deve-se observar que o M2 impõe uma estrutura específica às interações. A diferença entre classes pode variar com a idade e com a condição de viagem, enquanto parte da diferença entre sexos é descrita pela interação com a classe. A discrepância entre sobrevivência observada e prevista entre crianças pequenas, identificada no diagnóstico, mostra que o modelo não representa igualmente bem todos os perfis. As curvas são, portanto, descrições da relação estimada na amostra e não previsões certas sobre indivíduos específicos.
+# Avaliação preditiva na amostra de teste
+
+Esta é a medida da capacidade preditiva do trabalho. A avaliação final foi realizada no conjunto de teste, mantido fora das etapas de exploração, seleção e comparação dos modelos. A função `last_fit()` reajusta o modelo final (M6, ligação logito) com todo o conjunto de treinamento e calcula as previsões para os `r nrow(teste)` passageiros separados no início da análise. Considera-se a sobrevivência como o evento de interesse e o ponto de corte de 0,5.
+
+```{r}
+#| label: teste
+#| results: asis
+wf_final <- workflow() |>
+  add_formula(formulas$M6) |>
+  add_model(ligacoes$logito)
+final_res <- last_fit(wf_final, split, metrics = metricas)
+
+met_teste <- collect_metrics(final_res)
+met <- function(nome) {
+  met_teste$.estimate[met_teste$.metric == nome]
+}
+preds <- collect_predictions(final_res)
+
+sens_teste <- sensitivity(
+  preds, truth = vivo, estimate = .pred_class, event_level = "second"
+)$.estimate
+esp_teste <- specificity(
+  preds, truth = vivo, estimate = .pred_class, event_level = "second"
+)$.estimate
+kappa_teste <- kap(preds, truth = vivo, estimate = .pred_class)$.estimate
+
+tabela_pdf(
+  data.frame(
+    `Métrica` = c(
+      "AUC (área sob a curva ROC)", "Escore de Brier", "Acurácia",
+      "Sensibilidade (sobreviventes identificados)",
+      "Especificidade (não sobreviventes identificados)",
+      "Kappa"
+    ),
+    Estimativa = c(
+      met("roc_auc"), met("brier_class"), met("accuracy"),
+      sens_teste, esp_teste, kappa_teste
+    ),
+    check.names = FALSE
+  ),
+  "Medidas de desempenho do modelo final no conjunto de teste",
+  digitos = 3
+)
+
+cm <- table(Previsto = preds$.pred_class, Observado = preds$vivo)
+tabela_pdf(
+  data.frame(
+    Previsto = c("Não sobreviveu", "Sobreviveu"),
+    `Observado: não sobreviveu` = as.integer(cm[, "nao"]),
+    `Observado: sobreviveu` = as.integer(cm[, "sim"]),
+    check.names = FALSE
+  ),
+  "Matriz de confusão no conjunto de teste (ponto de corte de 0,5)",
+  digitos = 0
+)
+
+acuracia_base <- mean(teste$vivo == "nao")
+brier_nulo <- mean((mean(treino$vivo == "sim") - as.numeric(teste$vivo == "sim"))^2)
+```
+
+No conjunto de teste, a área sob a curva ROC foi de `r numero_pt(met("roc_auc"), 3)`, o escore de Brier foi de `r numero_pt(met("brier_class"), 3)` e a acurácia foi de `r porcentagem(met("accuracy"))`. A AUC resume a capacidade de ordenar os passageiros segundo suas probabilidades estimadas, enquanto o Brier avalia a distância entre essas probabilidades e os resultados observados. Para dar contexto a esses números: um classificador que apontasse sempre "não sobreviveu" acertaria `r porcentagem(acuracia_base)` dos passageiros do teste, e um modelo sem covariáveis, que atribui a todos a proporção de sobreviventes do treino, teria Brier de `r numero_pt(brier_nulo, 3)`. O modelo final fica acima dessas duas referências.
+
+Com o ponto de corte de 0,5, a sensibilidade foi de `r porcentagem(sens_teste)` e a especificidade, de `r porcentagem(esp_teste)`. O modelo identifica melhor os não sobreviventes do que os sobreviventes. A diferença entre essas medidas mostra que a mesma acurácia global pode esconder resultados distintos para cada grupo, e a escolha de outro ponto de corte alteraria o equilíbrio entre os erros, sem mudar as probabilidades estimadas. A @fig-roc mostra o compromisso entre sensibilidade e taxa de falsos positivos em diferentes pontos de corte.
+
+```{r}
+#| label: fig-roc
+#| fig-cap: "Curva ROC do modelo final no conjunto de teste."
+#| fig-width: 4.5
+#| fig-height: 4.5
+preds |>
+  roc_curve(truth = vivo, .pred_sim, event_level = "second") |>
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) +
+  geom_abline(linetype = "dashed", colour = "grey50") +
+  geom_path(linewidth = 0.9) +
+  coord_equal() +
+  labs(x = "1 − especificidade", y = "Sensibilidade")
+```
+
+```{r}
+#| label: gemeos-teste
+chave <- function(x) paste(x$idade, x$classe, x$sexo, x$sozinho)
+n_gemeos <- sum(chave(teste) %in% chave(treino))
+```
+
+Há um cuidado na leitura desses resultados. Como a base tem linhas repetidas, `r n_gemeos` dos `r nrow(teste)` passageiros do teste (`r porcentagem(n_gemeos / nrow(teste))`) têm o mesmo perfil de idade, classe, sexo e `sozinho` de algum passageiro do treino. Assim, o teste não é composto apenas por perfis novos para o modelo.
+
+# Limitações
+
+```{r}
+#| label: sensibilidade-teste
+auc_teste_outro <- function(f) {
+  fit <- suppressWarnings(glm(f, data = treino, family = binomial))
+  p <- suppressWarnings(predict(fit, newdata = teste, type = "response"))
+  roc_auc_vec(teste$vivo, 1 - p)
+}
+auc_m2_teste <- auc_teste_outro(formulas$M2)
+auc_m4_teste <- auc_teste_outro(formulas$M4)
+```
+
+-   **Linhas repetidas.** A base tem `r sum(duplicated(titanic))` linhas repetidas e não possui identificador individual, o que impede saber se são pessoas diferentes com perfis idênticos. Elas foram mantidas. Em consequência, passageiros com o mesmo perfil podem aparecer no treino e no teste, e também nas partes de ajuste e de validação da validação cruzada, o que pode tornar as medidas de desempenho mais otimistas.
+-   **Tamanho do teste.** O conjunto de teste tem `r nrow(teste)` passageiros e uma única partição dos dados, de modo que as medidas de desempenho têm incerteza considerável.
+-   **Interações com `sozinho`.** Duas interações de terceira ordem com `sozinho` tiveram valores-p entre `r numero_pt(min(p_soz[6:7]), 3)` e `r numero_pt(max(p_soz[6:7]), 3)`, e o modelo completo reduz a deviance em relação ao M6 (valor-p `r valor_p_texto(lrt_m6_m4$p)`). Como verificação, os modelos M2 e M4, que não foram escolhidos, têm AUC de `r numero_pt(auc_m2_teste, 3)` e `r numero_pt(auc_m4_teste, 3)` no mesmo conjunto de teste, contra `r numero_pt(met("roc_auc"), 3)` do M6. A escolha do M6 foi feita antes dessa comparação e não se baseou no teste. Uma diferença dessa ordem é pequena diante da incerteza de um teste com `r nrow(teste)` passageiros, mas indica que o M6 pode omitir alguma estrutura fraca envolvendo `sozinho`.
+-   **Hierarquia.** Os modelos M2, M3 e M5 não respeitam a hierarquia das interações. Eles foram usados apenas como alternativas preditivas e não foram candidatos ao modelo final.
+-   **Independência.** O modelo supõe observações independentes. Familiares e grupos que viajavam juntos podem ter tido desfechos semelhantes, o que não é representado no modelo.
+-   **Resíduos aleatorizados.** Os resíduos quantílicos para resposta binária dependem de um sorteio. Por isso, os testes de normalidade foram lidos junto com os gráficos.
+-   **Escopo.** Os resultados mostram associação, e não causa, e se referem a um único naufrágio, ocorrido em 1912.
 
 # Conclusão
 
-Os resultados indicam que a sobrevivência dos passageiros não foi distribuída de maneira uniforme entre os perfis analisados. Sexo e classe apresentaram contrastes descritivos expressivos, e a idade também mostrou diferenças relevantes quando examinada em conjunto com o sexo. Nos modelos, essas associações se tornaram mais complexas devido à presença de interações. A ANOVA tipo III do modelo completo não deve ser resumida à significância da interação entre sexo e classe, pois seus testes são condicionais a todos os demais termos e apontam também para combinações que envolvem a condição de viajar sozinho. Assim, a conclusão mais consistente não é a de um único efeito universal, mas a existência de heterogeneidade entre os grupos observados.
+Os dados mostram que a sobrevivência dos passageiros não foi distribuída de maneira uniforme. Sexo, classe e idade estão associados à sobrevivência, mesmo quando as outras variáveis são mantidas fixas. O resultado principal é que a diferença entre homens e mulheres depende da classe: a chance dos homens foi `r reducao("Masculino vs. feminino", "Classe I")`% menor na classe I, `r reducao("Masculino vs. feminino", "Classe II")`% menor na classe II e `r reducao("Masculino vs. feminino", "Classe III")`% menor na classe III. A idade reduziu a chance de sobreviver em `r reducao("Idade (+10 anos)", "Todos")`% a cada dez anos, com o mesmo efeito para homens e mulheres. Viajar sozinho, que parecia associado à menor sobrevivência na análise descritiva, não tem efeito principal nem interações de segunda ordem quando sexo, classe e idade entram no modelo, o que é compatível com a explicação pela composição dos grupos. Duas interações de terceira ordem com essa variável mostraram indício fraco, discutido nas limitações.
 
-Na comparação preditiva, a validação cruzada mostrou a importância de avaliar o ganho de ajuste junto à complexidade das especificações. Modelos mais extensos podem reduzir o erro observado no treinamento sem oferecer vantagem estável nas partições de validação. O M2 com ligação logito foi mantido como referência para a avaliação final e apresentou, na amostra de teste, AUC de `r numero_pt(met("roc_auc"), 3)`, Brier de `r numero_pt(met("brier_class"), 3)` e acurácia de `r porcentagem(met("accuracy"))`. Essas medidas descrevem aspectos complementares do desempenho, mas não demonstram que o modelo escolhido seja superior a toda alternativa possível.
-
-Algumas limitações devem orientar a leitura dos resultados. A base não dispõe de identificador individual, o que impede distinguir registros repetidos de passageiros diferentes com perfis idênticos. O conjunto de teste tem apenas `r nrow(teste)` observações, e sua composição pode afetar as medidas obtidas em uma única partição. O diagnóstico sugere dificuldades para representar a sobrevivência de meninos pequenos, enquanto determinadas combinações de características contam com poucos registros. Além disso, as especificações M2, M3 e M5 preservadas do roteiro original não respeitam integralmente a hierarquia das interações. Antes de utilizar esses modelos para inferência confirmatória, recomenda-se reespecificar suas fórmulas e repetir a validação. Mesmo com esses limites, o estudo mostra como a análise conjunta de associação, diagnóstico e previsão fornece uma visão mais completa do que a comparação de proporções isoladas.
+Na comparação entre modelos, os candidatos com mais interações melhoram o ajuste no treinamento, mas não oferecem vantagem clara na validação cruzada. O modelo final, com classe, idade, sexo e a interação sexo × classe e ligação logito, foi escolhido por ser hierárquico, ter evidência em todos os seus termos e ter o menor AIC e BIC. No conjunto de teste, ele obteve AUC de `r numero_pt(met("roc_auc"), 3)`, escore de Brier de `r numero_pt(met("brier_class"), 3)` e acurácia de `r porcentagem(met("accuracy"))`, com sensibilidade de `r porcentagem(sens_teste)` e especificidade de `r porcentagem(esp_teste)`. Esse desempenho é superior ao de um modelo sem covariáveis, mas o modelo identifica melhor os não sobreviventes do que os sobreviventes. As limitações descritas, em especial as linhas repetidas e o tamanho do teste, devem orientar a leitura desses números.
 
 # Referências {.unnumbered}
 
-Materiais didáticos das disciplinas de Modelos Lineares Generalizados e Modelos de Regressão, ministradas pelo professor Fábio N. Demarqui na Universidade Federal de Minas Gerais.
-
 DUNN, P. K. e SMYTH, G. K. Randomized quantile residuals. *Journal of Computational and Graphical Statistics*, v. 5, n. 3, p. 236–244, 1996.
+
+FOX, J. e WEISBERG, S. *An R Companion to Applied Regression*. 3. ed. Thousand Oaks: Sage, 2019.
+
+KUHN, M. e WICKHAM, H. *Tidymodels: a collection of packages for modeling and machine learning using tidyverse principles*. 2020. Disponível em: <https://www.tidymodels.org>.
+
+R CORE TEAM. *R: a language and environment for statistical computing*. Vienna: R Foundation for Statistical Computing. Disponível em: <https://www.R-project.org>.
+
+WICKHAM, H. et al. Welcome to the tidyverse. *Journal of Open Source Software*, v. 4, n. 43, p. 1686, 2019.
+
+Materiais didáticos das disciplinas de Modelos Lineares Generalizados e Modelos de Regressão, ministradas pelo professor Fábio N. Demarqui na Universidade Federal de Minas Gerais.
